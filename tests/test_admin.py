@@ -8,7 +8,7 @@ def base_state():
     return {
         "version": 1,
         "config": {"dry_run": False, "keywords": ["original comedy"],
-                   "shorts": [], "approved_groups": [], "selected_groups": [123],
+                   "shorts": [], "selected_groups": [123],
                    "limits": {"discovery_results": 5, "joins_per_run": 1,
                               "posts_per_run": 1, "posts_per_day": 2,
                               "cooldown_hours": 48}},
@@ -34,16 +34,14 @@ def test_parse_shorts_rejects_untrusted_link():
         parse_shorts("")
 
 
-def test_management_preserves_history_approvals_and_enforces_dry_run():
+def test_management_preserves_history_and_selection_and_enforces_dry_run():
     prior = base_state()
-    prior["config"]["approved_groups"] = [
-        {"id": 123, "approved": True, "cooldown_hours": 48}]
     updated = update_settings(prior, "https://youtu.be/abcdefghijk",
                               "original comedy, youtube promotion")
     assert updated["config"]["dry_run"] is True
     assert len(updated["config"]["shorts"]) == 1
     assert len(updated["config"]["keywords"]) == 2
-    assert updated["config"]["approved_groups"] == prior["config"]["approved_groups"]
+    assert updated["config"]["selected_groups"] == prior["config"]["selected_groups"]
     assert updated["groups"] == prior["groups"]
     assert updated["posts"] == prior["posts"]
     assert prior["config"]["dry_run"] is False

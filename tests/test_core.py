@@ -2,14 +2,14 @@ import asyncio
 from copy import deepcopy
 import pytest
 
-from promo.core import Engine, Group, video_id, rules_hash
+from promo.core import Engine, Group, video_id
 from promo.store import validate_state
 
 NOW = 1_800_000_000
 RULES = 'YouTube Shorts promotion is allowed.'
 
 def config():
-    return {'dry_run': True, 'keywords': ['comedy'], 'shorts': [{'url': 'https://youtube.com/shorts/abcdefghijk', 'caption': 'Original comedy'}], 'limits': {'joins_per_run': 1, 'posts_per_run': 1, 'posts_per_day': 2, 'cooldown_hours': 48, 'discovery_results': 5}, 'approved_groups': [], 'selected_groups': [123,456,1001,1002,1003,1004]}
+    return {'dry_run': True, 'keywords': ['comedy'], 'shorts': [{'url': 'https://youtube.com/shorts/abcdefghijk', 'caption': 'Original comedy'}], 'limits': {'joins_per_run': 1, 'posts_per_run': 1, 'posts_per_day': 2, 'cooldown_hours': 48, 'discovery_results': 5}, 'selected_groups': [123,456,1001,1002,1003,1004]}
 
 class Memory:
     def __init__(self):
@@ -149,11 +149,10 @@ def test_read_only_groups_are_not_joined_or_posted():
     assert store.state['groups']['123']['status'] == 'messaging_disabled'
 
 
-def test_approved_group_minimum_cooldown_is_respected():
+def test_global_group_cooldown_is_respected():
     store, tg, cfg = Memory(), Telegram(), config()
     cfg['dry_run'] = False
-    tg.group.about = 'Comedy group; ask admin for promotion permission.'
-    cfg['approved_groups'] = [{'id': 123, 'rules_hash': rules_hash(tg.group), 'approved': True, 'evidence': 'Admin allows one promotion weekly', 'expires_at': NOW + 7 * 86400, 'cooldown_hours': 168}]
+    cfg['limits']['cooldown_hours'] = 168
     store.state['posts'] = {'123:123456789ab': {'group_id': 123, 'at': NOW - 72 * 3600, 'status': 'confirmed'}}
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
     assert tg.sent == 0

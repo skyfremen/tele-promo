@@ -1,6 +1,6 @@
 """Phone-friendly private configuration commands for Actions workflow dispatch.
 
-Never prints group names, URLs, credentials, captions or approval evidence.
+Never prints group names, URLs, credentials or captions.
 """
 import copy
 import os

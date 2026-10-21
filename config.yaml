@@ -16,10 +16,6 @@ limits:
   posts_per_run: 1
   posts_per_day: 2
   cooldown_hours: 48
-# Use python -m promo review, then approve with the exact current rules hash,
-# --group ID --rules-sha256 HASH --evidence 'explicit admin/rules permission'
-# --confirm-promotion-permitted. Approvals expire in 7 days and on rules changes.
-approved_groups: []
-# Explicitly selected group IDs after obtaining permission externally.
-# Until selected, discovery scans without joining or posting.
+# Explicit group IDs for which the operator has separately confirmed posting
+# permission. Joining alone never approves future groups for messaging.
 selected_groups: []

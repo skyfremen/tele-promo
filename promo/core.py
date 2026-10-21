@@ -73,12 +73,8 @@ def validate_config(config):
             or any(type(gid) is not int or gid <= 0 for gid in selected)
             or len(set(selected)) != len(selected)):
         raise ValueError('selected_groups must contain up to 100 unique numeric group IDs')
-    if not isinstance(config.get('shorts'), list) or not isinstance(config.get('approved_groups'), list):
-        raise ValueError('shorts and approved_groups must be lists')
-    for approval in config['approved_groups']:
-        interval = approval.get('cooldown_hours', 48)
-        if type(interval) is not int or not 24 <= interval <= 8760:
-            raise ValueError('Invalid approved group cooldown')
+    if not isinstance(config.get('shorts'), list):
+        raise ValueError('shorts must be a list')
     for short in config['shorts']:
         video_id(short['url'])
         if 'message' in short:
@@ -206,10 +202,7 @@ class Engine:
             recent = [p for p in ledger.values() if self.now() - p['at'] < 86400]
             if posts >= limits['posts_per_run'] or len(recent) >= limits['posts_per_day']:
                 return
-            interval = max([limits['cooldown_hours']] + [
-                a.get('cooldown_hours', 48)
-                for a in config['approved_groups'] if a.get('id') == group.id
-            ])
+            interval = limits['cooldown_hours']
             if any(p['group_id'] == group.id and self.now() - p['at'] < interval * 3600
                    for p in ledger.values()):
                 return

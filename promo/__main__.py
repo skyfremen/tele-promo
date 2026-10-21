@@ -30,14 +30,6 @@ def main():
     cfg = sub.add_parser('configure', help='Replace private settings without resetting history')
     cfg.add_argument('--config', required=True)
     sub.add_parser('review', help='Print private group/rules report locally')
-    approve = sub.add_parser('approve', help='Attest that rules/admin explicitly permit YouTube Shorts promotion')
-    approve.add_argument('--group', type=int, required=True)
-    approve.add_argument('--rules-sha256', required=True)
-    approve.add_argument('--evidence', required=True, help='Explicit unconditional promotion permission; conditional/time-window rules are unsupported')
-    approve.add_argument('--cooldown-hours', type=int, default=48, help='Minimum interval required by the group (24 to 8760 hours)')
-    approve.add_argument('--confirm-promotion-permitted', action='store_true', required=True)
-    revoke = sub.add_parser('revoke')
-    revoke.add_argument('--group', type=int, required=True)
     args = parser.parse_args()
     if args.command != 'run':
         local_only()
@@ -61,22 +53,6 @@ def main():
         store.save(state)
     elif args.command == 'review':
         print(json.dumps(state['groups'], indent=2, ensure_ascii=False))
-    elif args.command == 'approve':
-        group = state['groups'][str(args.group)]
-        if args.rules_sha256 != group['rules_hash'] or not args.evidence.strip() or not group['rules_complete'] or not 24 <= args.cooldown_hours <= 8760:
-            raise ValueError('Review current, readable rules before approving')
-        approval = {'id': args.group, 'rules_hash': args.rules_sha256, 'evidence': args.evidence,
-                    'approved': True, 'expires_at': time.time() + 7 * 86400, 'cooldown_hours': args.cooldown_hours}
-        state['config']['approved_groups'] = [a for a in state['config']['approved_groups'] if a['id'] != args.group] + [approval]
-        state['denied_groups'] = [gid for gid in state.get('denied_groups', []) if gid != args.group]
-        store.save(state)
-    elif args.command == 'revoke':
-        state['config']['approved_groups'] = [a for a in state['config']['approved_groups'] if a['id'] != args.group]
-        # Explicit denials override machine-readable permission too.
-        state.setdefault('denied_groups', [])
-        if args.group not in state['denied_groups']:
-            state['denied_groups'].append(args.group)
-        store.save(state)
     else:
         config = validate_config(state['config'])
         async def execute():

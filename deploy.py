@@ -43,8 +43,6 @@ def main():
     import yaml
     from promo.core import validate_config
     public_template = yaml.safe_load((ROOT / 'config.yaml').read_text())
-    if public_template.get('approved_groups'):
-        raise ValueError('Keep approvals in private state; never in public config.yaml')
     repo(PUBLIC, False)
     repo(PRIVATE, True)
     # Initialize the private default branch with a non-sensitive sentinel.

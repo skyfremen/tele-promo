@@ -20,7 +20,7 @@ class Memory:
 
 class Telegram:
     def __init__(self, group=None):
-        self.group = group or Group(123, 'comedy_test', 'Comedy', RULES, '', True, False)
+        self.group = group or Group(123, 'comedy_test', 'Comedy', RULES, '', True, False, member_count=150)
         self.joined = self.sent = 0
         self.failure = False
     async def list_joined(self, limit):
@@ -213,7 +213,7 @@ def test_exact_message_sent_unchanged_to_explicitly_permitting_group():
     cfg['dry_run'] = False
     cfg['keywords'] = ['sub4sub']
     cfg['shorts'] = [{'url': 'https://youtu.be/m8IxHy_WPJk', 'message': EXACT_SUB4SUB_MESSAGE}]
-    tg = Telegram(Group(456, 'sub_for_sub', 'Sub4Sub', 'Sub4Sub is welcome.', '', True, False))
+    tg = Telegram(Group(456, 'sub_for_sub', 'Sub4Sub', 'Sub4Sub is welcome.', '', True, False, member_count=150))
     received = []
     original_send = tg.send
 

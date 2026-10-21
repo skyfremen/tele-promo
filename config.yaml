@@ -9,6 +9,9 @@ shorts: []
 # Example item: {url: "https://www.youtube.com/shorts/VIDEO_ID", caption: "My original comedy short"}
 limits:
   discovery_results: 5
+  joined_scan_limit: 100
+  joined_inspect_limit: 20
+  min_group_members: 100
   joins_per_run: 1
   posts_per_run: 1
   posts_per_day: 2

@@ -34,8 +34,8 @@ def parse_shorts(value):
     return items
 
 
-def update_settings(state, urls="", keywords=""):
-    if not urls.strip() and not keywords.strip():
+def update_settings(state, urls="", keywords="", min_group_members=""):
+    if not urls.strip() and not keywords.strip() and not str(min_group_members).strip():
         raise ValueError("Provide Shorts links and/or search keywords")
     revised = copy.deepcopy(state)
     config = copy.deepcopy(revised["config"])
@@ -43,6 +43,11 @@ def update_settings(state, urls="", keywords=""):
         config["shorts"] = parse_shorts(urls)
     if keywords.strip():
         config["keywords"] = [item.strip() for item in keywords.split(",") if item.strip()]
+    if str(min_group_members).strip():
+        value = str(min_group_members).strip()
+        if not value.isdecimal() or int(value) > 1000000:
+            raise ValueError("Minimum group members must be an integer between 0 and 1000000")
+        config.setdefault("limits", {})["min_group_members"] = int(value)
     # Changing settings never silently enables live Telegram mutations.
     config["dry_run"] = True
     revised["config"] = validate_config(config)
@@ -72,7 +77,8 @@ def summary(state):
             "; shorts: " + str(len(config["shorts"])) +
             "; discovered groups: " + str(len(state["groups"])) +
             "; existing post records: " + str(len(state["posts"])) +
-            "; approvals: " + str(len(config["approved_groups"])))
+            "; approvals: " + str(len(config["approved_groups"])) +
+            "; minimum new-group members: " + str(config["limits"].get("min_group_members", 100)))
 
 
 def main():
@@ -92,7 +98,8 @@ def main():
         if store.state is None:
             raise ValueError("Bootstrap private state before configuring")
         updated = update_settings(store.state, os.environ.get("MOBILE_SHORTS", ""),
-                                  os.environ.get("MOBILE_KEYWORDS", ""))
+                                  os.environ.get("MOBILE_KEYWORDS", ""),
+                                  os.environ.get("MOBILE_MIN_GROUP_MEMBERS", ""))
         store.save(updated)
     elif action in ("activate", "pause"):
         if store.state is None:

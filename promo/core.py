@@ -19,6 +19,7 @@ class Group:
     member: bool
     rules_complete: bool = True
     posting_allowed: bool = True
+    member_count: int | None = None
 
 
 def rules_hash(group):
@@ -78,6 +79,15 @@ def validate_config(config):
         raise ValueError('Configure one to five keywords of at least three characters')
     ceilings = {'joins_per_run': 2, 'posts_per_run': 3, 'posts_per_day': 5, 'discovery_results': 20}
     limits = config.get('limits', {})
+    optional_limits = {
+        'min_group_members': (100, 0, 1000000),
+        'joined_scan_limit': (100, 0, 500),
+        'joined_inspect_limit': (20, 0, 50),
+    }
+    for name, (default, minimum, maximum) in optional_limits.items():
+        value = limits.get(name, default)
+        if type(value) is not int or not minimum <= value <= maximum:
+            raise ValueError('Invalid ' + name + ' limit')
     for name, ceiling in ceilings.items():
         if type(limits.get(name)) is not int or not 0 <= limits[name] <= ceiling:
             raise ValueError('Invalid operation limit')
@@ -114,76 +124,150 @@ class Engine:
 
     async def run(self, live=False):
         state, config = self.store.state, self.config
-        now = self.now()
-        if state.get('blocked_until', 0) > now:
+        if state.get('blocked_until', 0) > self.now():
             return
         limits = config['limits']
         mutate = live and not config['dry_run']
-        # Refresh old groups as well as newly discovered ones, bounded per run.
-        found = await self.tg.discover(config['keywords'], limits['discovery_results'])
-        usernames = list(dict.fromkeys([g.username for g in found] + [g['username'] for g in state['groups'].values()]))
-        joins = posts = 0
-        for username in usernames[:max(1, limits['discovery_results'])]:
-            group = await self.tg.inspect(username)
+        min_members = limits.get('min_group_members', 100)
+        joins = posts = eligible_joined = 0
+        seen = set()
+        keywords = [k.lower() for k in config['keywords']]
+
+        async def examine(reference, source):
+            nonlocal joins, posts, eligible_joined
+            group = await self.tg.inspect(reference)
+            if group.id in seen:
+                return
+            seen.add(group.id)
             gid = str(group.id)
-            relevant = any(k.lower() in (group.title + ' ' + group.about).lower() for k in config['keywords'])
-            allowed = group.id not in state.get('denied_groups', []) and relevant and permitted(group, config['approved_groups'], self.now())
+            relevant = any(k in (group.title + ' ' + group.about).lower() for k in keywords)
+            allowed = (group.id not in state.get('denied_groups', [])
+                       and relevant and permitted(group, config['approved_groups'], self.now()))
+            minimum_met = (group.member or
+                           (type(group.member_count) is int and group.member_count >= min_members))
             previous = state['groups'].get(gid, {})
+            if not relevant:
+                status = 'irrelevant'
+            elif not allowed:
+                status = 'needs_approval'
+            elif not minimum_met:
+                status = 'member_count_unknown' if group.member_count is None else 'below_member_minimum'
+            else:
+                status = 'eligible'
             state['groups'][gid] = {
                 'username': group.username, 'title': group.title,
                 'about': group.about, 'pinned': group.pinned,
                 'rules_hash': rules_hash(group), 'rules_complete': group.rules_complete,
-                'member': group.member, 'seen_at': self.now(),
-                'status': 'eligible' if allowed else 'needs_approval',
+                'member': group.member, 'member_count': group.member_count,
+                'source': source, 'seen_at': self.now(), 'status': status,
                 'join_attempted_at': previous.get('join_attempted_at', 0),
             }
             self.store.save(state)
-            if not allowed or not mutate:
-                continue
+            if not allowed or not minimum_met:
+                return
+            if group.member:
+                eligible_joined += 1
+            if not mutate or not config['shorts']:
+                return
+
+            ledger = state['posts']
+            recent = [p for p in ledger.values() if self.now() - p['at'] < 86400]
+            if posts >= limits['posts_per_run'] or len(recent) >= limits['posts_per_day']:
+                return
+            interval = max([limits['cooldown_hours']] + [
+                a.get('cooldown_hours', 48)
+                for a in config['approved_groups'] if a.get('id') == group.id
+            ])
+            if any(p['group_id'] == group.id and self.now() - p['at'] < interval * 3600
+                   for p in ledger.values()):
+                return
+            short = next((short for short in config['shorts']
+                          if f"{group.id}:{video_id(short['url'])}" not in ledger), None)
+            if short is None:
+                return
+
             if not group.member:
-                if joins >= limits['joins_per_run'] or (previous.get('join_attempted_at') and self.now() - previous['join_attempted_at'] < 7 * 86400):
-                    continue
-                # Journal membership attempts too, so join requests aren't repeated.
+                if (joins >= limits['joins_per_run'] or
+                        (previous.get('join_attempted_at') and
+                         self.now() - previous['join_attempted_at'] < 7 * 86400)):
+                    return
+                # Persist the attempt before joining to avoid repeated join requests.
                 state['groups'][gid]['join_attempted_at'] = self.now()
                 self.store.save(state)
                 joins += 1
                 await self.tg.join(group)
-                group = await self.tg.inspect(username)
+                group = await self.tg.inspect(group.username)
                 if group.id != int(gid) or not group.member:
-                    continue
+                    return
                 state['groups'][gid]['member'] = True
                 self.store.save(state)
-            # Re-read authoritative rules after joining and immediately before send.
-            group = await self.tg.inspect(username)
-            if group.id != int(gid) or not permitted(group, config['approved_groups'], self.now()):
-                continue
+
+            # Check current rules again immediately before posting, not just
+            # the cached discovery result. Existing groups follow the same gate.
+            group = await self.tg.inspect(group.username or group.id)
+            if (group.id != int(gid) or
+                    group.id in state.get('denied_groups', []) or
+                    not permitted(group, config['approved_groups'], self.now())):
+                return
             if not await self.tg.can_post(group):
                 state['groups'][gid]['status'] = 'restricted'
                 self.store.save(state)
-                continue
-            ledger = state['posts']
-            recent = [p for p in ledger.values() if self.now() - p['at'] < 86400]
-            if posts >= limits['posts_per_run'] or len(recent) >= limits['posts_per_day']:
-                continue
-            interval = max([limits['cooldown_hours']] + [a.get('cooldown_hours', 48) for a in config['approved_groups'] if a.get('id') == group.id])
-            if any(p['group_id'] == group.id and self.now() - p['at'] < interval * 3600 for p in ledger.values()):
-                continue
-            for short in config['shorts']:
-                vid = video_id(short['url'])
-                key = f'{group.id}:{vid}'
-                if key in ledger:  # pending/uncertain deliveries also block repeats forever
-                    continue
-                entry = {'group_id': group.id, 'video_id': vid, 'at': self.now(), 'status': 'pending', 'random_id': secrets.randbits(63)}
-                ledger[key] = entry
-                self.store.save(state)  # abort before sending if durable persistence fails
-                try:
-                    message = short['message'] if 'message' in short else short['caption'] + '\nhttps://www.youtube.com/shorts/' + vid
-                    message_id = await self.tg.send(group, message, entry['random_id'])
-                except BaseException:
-                    entry['status'] = 'uncertain'
-                    self.store.save(state)
-                    raise
-                entry.update(status='confirmed', message_id=message_id)
+                return
+
+            vid = video_id(short['url'])
+            key = f'{group.id}:{vid}'
+            entry = {'group_id': group.id, 'video_id': vid, 'at': self.now(),
+                     'status': 'pending', 'random_id': secrets.randbits(63)}
+            ledger[key] = entry
+            self.store.save(state)
+            try:
+                message = (short['message'] if 'message' in short else
+                           short['caption'] + '\nhttps://www.youtube.com/shorts/' + vid)
+                message_id = await self.tg.send(group, message, entry['random_id'])
+            except BaseException:
+                entry['status'] = 'uncertain'
                 self.store.save(state)
-                posts += 1
+                raise
+            entry.update(status='confirmed', message_id=message_id)
+            self.store.save(state)
+            posts += 1
+
+        # Pass 1: scan existing memberships before any global Telegram search.
+        joined_limit = limits.get('joined_scan_limit', 100)
+        inspect_limit = limits.get('joined_inspect_limit', 20)
+        joined = await self.tg.list_joined(joined_limit)
+        matching = [g for g in joined if any(k in g.title.lower() for k in keywords)]
+        others = [g for g in joined if not any(k in g.title.lower() for k in keywords)]
+        # Spread coverage across runs: a long unrelated chat list must not hide
+        # lower-ranked groups forever.
+        matching.sort(key=lambda g: state['groups'].get(str(g.id), {}).get('seen_at', 0))
+        first = matching[:inspect_limit]
+        remaining = inspect_limit - len(first)
+        cursor = state.get('joined_scan_cursor', 0)
+        if type(cursor) is not int or cursor < 0:
+            cursor = 0
+        if others and remaining:
+            first.extend(others[(cursor + i) % len(others)] for i in range(min(remaining, len(others))))
+            state['joined_scan_cursor'] = (cursor + remaining) % len(others)
+        elif not others:
+            state['joined_scan_cursor'] = 0
+        for candidate in first:
+            await examine(candidate.username or candidate.id, 'already_joined')
+
+        # Pass 2: search for new groups only if there is still capacity.
+        # In dry-run, an eligible existing group suffices for discovery.
+        if (posts >= limits['posts_per_run'] or
+                (not mutate and eligible_joined > 0)):
+            return
+        discovered = await self.tg.discover(config['keywords'], limits['discovery_results'])
+        known = [item for item in state['groups'].values()
+                 if item.get('username') and item.get('status') != 'irrelevant']
+        candidates = [g.username for g in discovered] + [
+            item['username'] for item in known if item.get('username')
+        ]
+        for reference in dict.fromkeys(candidates):
+            if len(seen) >= inspect_limit + limits['discovery_results']:
                 break
+            if posts >= limits['posts_per_run']:
+                break
+            await examine(reference, 'discovery')

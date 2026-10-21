@@ -3,11 +3,6 @@ on:
   schedule:
     - cron: '17 */12 * * *'
   workflow_dispatch:
-    inputs:
-      live:
-        description: 'Allow mutations (also requires private dry_run false and LIVE_ENABLED true)'
-        type: boolean
-        default: false
 permissions:
   contents: read
 concurrency:
@@ -34,11 +29,4 @@ jobs:
           TG_SESSION: ${{ secrets.TG_SESSION }}
           STATE_REPO: ${{ secrets.STATE_REPO }}
           STATE_TOKEN: ${{ secrets.STATE_TOKEN }}
-          ALLOW_LIVE: ${{ vars.LIVE_ENABLED == 'true' && (github.event_name == 'schedule' || inputs.live == true) }}
-        shell: bash
-        run: |
-          if [ "$ALLOW_LIVE" = "true" ]; then
-            python -m promo run --mode join --live
-          else
-            python -m promo run --mode join
-          fi
+        run: python -m promo run --mode join --live

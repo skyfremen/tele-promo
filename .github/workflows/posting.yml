@@ -2,11 +2,6 @@ name: Telegram message sending
 # Posting is manual only: review and obtain permission first.
 on:
   workflow_dispatch:
-    inputs:
-      live:
-        description: 'Send live only after checking promotion permission for all joined groups'
-        type: boolean
-        default: false
 permissions:
   contents: read
 concurrency:
@@ -33,11 +28,4 @@ jobs:
           TG_SESSION: ${{ secrets.TG_SESSION }}
           STATE_REPO: ${{ secrets.STATE_REPO }}
           STATE_TOKEN: ${{ secrets.STATE_TOKEN }}
-          ALLOW_LIVE: ${{ vars.LIVE_ENABLED == 'true' && inputs.live == true }}
-        shell: bash
-        run: |
-          if [ "$ALLOW_LIVE" = "true" ]; then
-            python -m promo run --mode send --live
-          else
-            python -m promo run --mode send
-          fi
+        run: python -m promo run --mode send --live

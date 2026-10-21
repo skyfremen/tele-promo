@@ -34,11 +34,11 @@ def test_parse_shorts_rejects_untrusted_link():
         parse_shorts("")
 
 
-def test_management_preserves_history_and_enforces_dry_run():
+def test_management_preserves_history_and_current_live_setting():
     prior = base_state()
     updated = update_settings(prior, "https://youtu.be/abcdefghijk",
                               "original comedy, youtube promotion")
-    assert updated["config"]["dry_run"] is True
+    assert updated["config"]["dry_run"] is False
     assert len(updated["config"]["shorts"]) == 1
     assert len(updated["config"]["keywords"]) == 2
     assert updated["groups"] == prior["groups"]
@@ -54,24 +54,30 @@ def test_management_rejects_invalid_keywords_and_noop():
     with pytest.raises(ValueError):
         update_settings(base_state(), keywords="a")
 
-def test_activation_requires_explicit_double_consent_and_discovery():
+def test_activate_and_pause_are_explicit_without_checkbox():
     state = base_state()
+    with pytest.raises(ValueError):
+        set_live(state, True)  # A Shorts URL must be configured before activation.
     state["config"]["shorts"] = parse_shorts("https://youtu.be/abcdefghijk")
-    with pytest.raises(ValueError):
-        set_live(state, True)
-    with pytest.raises(ValueError):
-        set_live(state, True, confirmed=True)
-    ready = set_live(state, True, confirmed=True, switch_enabled=True)
+    ready = set_live(state, True)
     assert ready["config"]["dry_run"] is False
     assert state["config"]["dry_run"] is False
     stopped = set_live(ready, False)
     assert stopped["config"]["dry_run"] is True
-    state["groups"].clear()
-    assert set_live(state, True, confirmed=True, switch_enabled=True)["config"]["dry_run"] is False
+    assert set_live(stopped, True)["config"]["dry_run"] is False
+    assert state["config"]["dry_run"] is False
 
 
 def test_live_activation_without_group_selection():
     state = base_state()
     state["config"]["shorts"] = parse_shorts("https://youtu.be/abcdefghijk")
     state["groups"] = {}
-    assert set_live(state, True, confirmed=True, switch_enabled=True)["config"]["dry_run"] is False
+    assert set_live(state, True)["config"]["dry_run"] is False
+
+
+def test_configure_keeps_paused_state_until_explicit_activation():
+    state = base_state()
+    state["config"]["dry_run"] = True
+    updated = update_settings(state, keywords="comedy, youtube")
+    assert updated["config"]["dry_run"] is True
+    assert state["config"]["dry_run"] is True

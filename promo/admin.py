@@ -48,19 +48,16 @@ def update_settings(state, urls="", keywords="", min_group_members=""):
         if not value.isdecimal() or int(value) > 1000000:
             raise ValueError("Minimum group members must be an integer between 0 and 1000000")
         config.setdefault("limits", {})["min_group_members"] = int(value)
-    # Changing settings never silently enables live Telegram mutations.
-    config["dry_run"] = True
+    # Preserve the operator's current live/paused choice when editing
+    # keywords or Shorts. Pausing is a separate explicit management action.
     revised["config"] = validate_config(config)
     return revised
 
 
-def set_live(state, enable, confirmed=False, switch_enabled=False):
+def set_live(state, enable):
     revised = copy.deepcopy(state)
-    if enable:
-        if not confirmed or not switch_enabled:
-            raise ValueError("Live posting requires explicit confirmation and LIVE_ENABLED")
-        if not revised["config"]["shorts"]:
-            raise ValueError("Configure at least one Shorts URL before activation")
+    if enable and not revised["config"]["shorts"]:
+        raise ValueError("Configure at least one Shorts URL before activation")
     revised["config"]["dry_run"] = not enable
     revised["config"] = validate_config(revised["config"])
     return revised
@@ -101,9 +98,7 @@ def main():
     elif action in ("activate", "pause"):
         if store.state is None:
             raise ValueError("Bootstrap private state first")
-        updated = set_live(store.state, action == "activate",
-                           confirmed=os.environ.get("MOBILE_CONFIRM_LIVE") == "true",
-                           switch_enabled=os.environ.get("LIVE_ENABLED") == "true")
+        updated = set_live(store.state, action == "activate")
         store.save(updated)
     print(summary(store.state))
     print("Telegram session secret: " +

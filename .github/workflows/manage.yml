@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       action:
-        description: 'Check status, initialize private state, or configure Shorts in dry-run'
+        description: 'Check status, initialize state, configure Shorts, activate or pause'
         type: choice
         required: true
         default: status
@@ -13,11 +13,6 @@ on:
           - configure
           - activate
           - pause
-      confirm_live:
-        description: 'Confirm live actions; also requires LIVE_ENABLED repository variable'
-        type: boolean
-        required: false
-        default: false
       shorts:
         description: 'Shorts URLs separated by commas (configure only; replaces current list)'
         type: string
@@ -55,8 +50,6 @@ jobs:
           STATE_TOKEN: ${{ secrets.STATE_TOKEN }}
           TG_SESSION: ${{ secrets.TG_SESSION }}
           MOBILE_ACTION: ${{ inputs.action }}
-          MOBILE_CONFIRM_LIVE: ${{ inputs.confirm_live }}
-          LIVE_ENABLED: ${{ vars.LIVE_ENABLED }}
           MOBILE_SHORTS: ${{ inputs.shorts }}
           MOBILE_KEYWORDS: ${{ inputs.keywords }}
           MOBILE_MIN_GROUP_MEMBERS: ${{ inputs.min_group_members }}

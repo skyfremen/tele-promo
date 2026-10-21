@@ -1,0 +1,19 @@
+# Copy this template to config.private.yaml for local edits (gitignored).
+# Import once: python -m promo init --config config.private.yaml
+# Subsequent edits: python -m promo configure --config config.private.yaml
+# Actual settings, approvals and operational history stay in private state.json.
+dry_run: true
+keywords:
+  - original comedy
+shorts: []
+# Example item: {url: "https://www.youtube.com/shorts/VIDEO_ID", caption: "My original comedy short"}
+limits:
+  discovery_results: 5
+  joins_per_run: 1
+  posts_per_run: 1
+  posts_per_day: 2
+  cooldown_hours: 48
+# Use python -m promo review, then approve with the exact current rules hash,
+# --group ID --rules-sha256 HASH --evidence 'explicit admin/rules permission'
+# --confirm-promotion-permitted. Approvals expire in 7 days and on rules changes.
+approved_groups: []

@@ -1,0 +1,44 @@
+name: Telegram promotion
+on:
+  schedule:
+    - cron: '17 */12 * * *'
+  workflow_dispatch:
+    inputs:
+      live:
+        description: 'Allow mutations (also requires private dry_run false and LIVE_ENABLED true)'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: telegram-promotion
+  cancel-in-progress: false
+jobs:
+  promote:
+    if: github.ref == 'refs/heads/main' && vars.AUTOMATION_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: telegram
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e .
+      - name: Run with private state
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          TG_SESSION: ${{ secrets.TG_SESSION }}
+          STATE_REPO: ${{ secrets.STATE_REPO }}
+          STATE_TOKEN: ${{ secrets.STATE_TOKEN }}
+          ALLOW_LIVE: ${{ vars.LIVE_ENABLED == 'true' && (github.event_name == 'schedule' || inputs.live == true) }}
+        shell: bash
+        run: |
+          if [ "$ALLOW_LIVE" = "true" ]; then
+            python -m promo run --live
+          else
+            python -m promo run
+          fi

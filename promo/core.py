@@ -118,7 +118,13 @@ class Engine:
             if not group.member:
                 new_examined.add(group.id)
             gid = str(group.id)
-            relevant = any(k in (group.title + ' ' + group.about).lower() for k in keywords)
+            # Accept common Sub4Sub spellings without matching unrelated 'sub' words.
+            haystack = (group.title + ' ' + group.about).lower()
+            normalized = re.sub(r'[^a-z0-9]+', '', haystack)
+            relevant = any(k in haystack or (re.sub(r'[^a-z0-9]+', '', k) in normalized
+                           and len(re.sub(r'[^a-z0-9]+', '', k)) >= 5)
+                           for k in keywords)
+            relevant = relevant or bool(re.search(r'\bsub\s*[24]\s*sub\b', haystack, re.I))
             # The independent manual sending workflow verifies membership and
             # Telegram's current messaging rights before publishing.
             denied = group.id in state.get('denied_groups', [])

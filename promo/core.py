@@ -122,25 +122,31 @@ class Engine:
             seen.add(group.id)
             gid = str(group.id)
             relevant = any(k in (group.title + ' ' + group.about).lower() for k in keywords)
-            # Permission is obtained separately by the operator. Only explicitly
-            # selected group IDs may be joined or messaged; search results alone
-            # do not grant consent to receive automated promotional posts.
-            allowed = (group.id in selected
-                       and group.id not in state.get('denied_groups', [])
-                       and relevant and group.is_group and group.posting_allowed)
+            # Joining a relevant public group does not require text-based
+            # promotional approval. Only sending messages requires that this
+            # exact group ID was separately selected by the operator.
+            denied = group.id in state.get('denied_groups', [])
             minimum_met = (group.member or
                            (type(group.member_count) is int and group.member_count >= min_members))
+            joinable = (not denied and relevant and group.is_group
+                        and not group.member and bool(group.username) and minimum_met)
+            postable = (not denied and relevant and group.is_group
+                        and group.id in selected and group.posting_allowed)
             previous = state['groups'].get(gid, {})
             if not relevant:
                 status = 'irrelevant'
-            elif group.id not in selected:
-                status = 'not_selected'
-            elif not group.is_group or not group.posting_allowed or group.id in state.get('denied_groups', []):
+            elif not group.is_group or denied:
                 status = 'restricted'
             elif not minimum_met:
                 status = 'member_count_unknown' if group.member_count is None else 'below_member_minimum'
-            else:
+            elif group.member:
+                status = 'eligible' if postable else 'joined_unselected'
+            elif postable:
                 status = 'eligible'
+            elif joinable:
+                status = 'join_candidate'
+            else:
+                status = 'not_selected'
             state['groups'][gid] = {
                 'username': group.username, 'title': group.title,
                 'about': group.about, 'pinned': group.pinned,
@@ -150,11 +156,26 @@ class Engine:
                 'join_attempted_at': previous.get('join_attempted_at', 0),
             }
             self.store.save(state)
-            if not allowed or not minimum_met:
-                return
-            if group.member:
+            if group.member and postable:
                 eligible_joined += 1
-            if not mutate or not config['shorts']:
+
+            # Joining has an independent, tightly rate-limited path. It does
+            # not require Shorts configuration or permission for promotional
+            # messages, and never increments the posting ledger.
+            if mutate and joinable and joins < limits['joins_per_run'] and not (
+                    previous.get('join_attempted_at') and
+                    self.now() - previous['join_attempted_at'] < 7 * 86400):
+                state['groups'][gid]['join_attempted_at'] = self.now()
+                self.store.save(state)
+                joins += 1
+                await self.tg.join(group)
+                group = await self.tg.inspect(group.username)
+                if group.id != int(gid) or not group.member:
+                    return
+                state['groups'][gid]['member'] = True
+                state['groups'][gid]['status'] = 'eligible' if postable else 'joined_unselected'
+                self.store.save(state)
+            if not mutate or not postable or not group.member or not config['shorts']:
                 return
 
             ledger = state['posts']
@@ -172,22 +193,6 @@ class Engine:
                           if f"{group.id}:{video_id(short['url'])}" not in ledger), None)
             if short is None:
                 return
-
-            if not group.member:
-                if (joins >= limits['joins_per_run'] or
-                        (previous.get('join_attempted_at') and
-                         self.now() - previous['join_attempted_at'] < 7 * 86400)):
-                    return
-                # Persist the attempt before joining to avoid repeated join requests.
-                state['groups'][gid]['join_attempted_at'] = self.now()
-                self.store.save(state)
-                joins += 1
-                await self.tg.join(group)
-                group = await self.tg.inspect(group.username)
-                if group.id != int(gid) or not group.member:
-                    return
-                state['groups'][gid]['member'] = True
-                self.store.save(state)
 
             # Check identity, membership and posting rights immediately
             # before sending. Only operator-selected groups can receive posts.
@@ -242,10 +247,10 @@ class Engine:
         for candidate in first:
             await examine(candidate.username or candidate.id, 'already_joined')
 
-        # Pass 2: search for new groups only if there is still capacity.
-        # In dry-run, an eligible existing group suffices for discovery.
-        if (posts >= limits['posts_per_run'] or
-                (not mutate and eligible_joined > 0)):
+        # Pass 2: search for public groups after checking existing memberships.
+        # Existing eligible message destinations do not prevent searching for
+        # additional relevant communities when a join slot remains available.
+        if (not mutate and eligible_joined > 0):
             return
         discovered = await self.tg.discover(config['keywords'], limits['discovery_results'])
         known = [item for item in state['groups'].values()
@@ -256,6 +261,6 @@ class Engine:
         for reference in dict.fromkeys(candidates):
             if len(seen) >= inspect_limit + limits['discovery_results']:
                 break
-            if posts >= limits['posts_per_run']:
+            if posts >= limits['posts_per_run'] and joins >= limits['joins_per_run']:
                 break
             await examine(reference, 'discovery')

@@ -52,7 +52,7 @@ def validate_config(config):
     keywords = config.get('keywords')
     if not isinstance(keywords, list) or not 1 <= len(keywords) <= 5 or any(not isinstance(k, str) or len(k.strip()) < 3 for k in keywords):
         raise ValueError('Configure one to five keywords of at least three characters')
-    ceilings = {'joins_per_run': 2, 'posts_per_run': 3, 'posts_per_day': 5, 'discovery_results': 20}
+    ceilings = {'joins_per_run': 2, 'posts_per_run': 5, 'posts_per_day': 20, 'discovery_results': 20}
     limits = config.get('limits', {})
     optional_limits = {
         'min_group_members': (100, 0, 1000000),
@@ -66,8 +66,8 @@ def validate_config(config):
     for name, ceiling in ceilings.items():
         if type(limits.get(name)) is not int or not 0 <= limits[name] <= ceiling:
             raise ValueError('Invalid operation limit')
-    if type(limits.get('cooldown_hours')) is not int or not 24 <= limits['cooldown_hours'] <= 8760:
-        raise ValueError('Cooldown must be at least 24 hours')
+    if type(limits.get('cooldown_hours')) is not int or not 12 <= limits['cooldown_hours'] <= 8760:
+        raise ValueError('Cooldown must be at least 12 hours')
     if not isinstance(config.get('shorts'), list):
         raise ValueError('shorts must be a list')
     for short in config['shorts']:
@@ -198,8 +198,20 @@ class Engine:
             if any(p['group_id'] == group.id and self.now() - p['at'] < interval * 3600
                    for p in ledger.values()):
                 return
-            short = next((short for short in config['shorts']
-                          if f"{group.id}:{video_id(short['url'])}" not in ledger), None)
+            # Prefer an unused video, then allow confirmed videos to repeat.
+            # Unresolved sends retain their duplicate protection indefinitely.
+            short = None
+            for candidate in config['shorts']:
+                vid = video_id(candidate['url'])
+                history = [p for key, p in ledger.items()
+                           if p['group_id'] == group.id and
+                           (p.get('video_id') == vid or key == f'{group.id}:{vid}')]
+                if any(p['status'] != 'confirmed' for p in history):
+                    continue
+                if short is None or not history:
+                    short = candidate
+                if not history:
+                    break
             if short is None:
                 return
 
@@ -216,9 +228,13 @@ class Engine:
                 return
 
             vid = video_id(short['url'])
-            key = f'{group.id}:{vid}'
             entry = {'group_id': group.id, 'video_id': vid, 'at': self.now(),
                      'status': 'pending', 'random_id': secrets.randbits(63)}
+            # Keep every attempt so reposts cannot erase rolling-limit history.
+            key = f"{group.id}:{vid}:{entry['random_id']}"
+            while key in ledger:
+                entry['random_id'] = secrets.randbits(63)
+                key = f"{group.id}:{vid}:{entry['random_id']}"
             ledger[key] = entry
             self.store.save(state)
             try:

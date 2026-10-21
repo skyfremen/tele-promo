@@ -69,12 +69,12 @@ def has_promotion_permission(group):
         return False
     rules = (group.about + '\\n' + group.pinned).lower()
     subject = r'(?:promot(?:ion|ions|e)?|advertis(?:e|ing|ements?)?|youtube|shorts|videos?|channels?|links?|sub4sub)'
-    deny = r'\\b(?:no|not|never|banned?|forbidden|prohibited?)\\b.{0,45}\\b' + subject
+    deny = r'\b(?:no|not|never|banned?|forbidden|prohibited?)\b.{0,45}\b' + subject
     if re.search(deny, rules):
         return False
     action = r'(?:allow(?:ed)?|welcom(?:e|ed)|permit(?:ted)?|share|post(?:ing)?|drop|promote)'
-    return bool(re.search(r'\\b' + action + r'\\b.{0,70}\\b' + subject + r'\\b', rules)
-                or re.search(r'\\b' + subject + r'\\b.{0,70}\\b' + action + r'\\b', rules))
+    return bool(re.search(r'\b' + action + r'\b.{0,70}\b' + subject + r'\b', rules)
+                or re.search(r'\b' + subject + r'\b.{0,70}\b' + action + r'\b', rules))
 
 
 def validate_config(config):
@@ -138,6 +138,7 @@ class Engine:
         joins = posts = 0
         seen = set()
         new_examined = set()
+        candidate_usernames = set()
         keywords = [k.lower() for k in config['keywords']]
 
         async def examine(reference, source, candidate=False):
@@ -351,6 +352,7 @@ class Engine:
                         changed = True
                     continue
                 usernames.add(key)
+                candidate_usernames.add(key)
                 # Recheck rejections weekly; never rejoin known members.
                 if entry.get('status') in ('joined', 'duplicate', 'invalid_url'):
                     continue
@@ -389,12 +391,14 @@ class Engine:
         discovered = await self.tg.discover(config['keywords'], target,
                                             exclude_ids=joined_ids)
         candidates = [g.username for g in discovered
-                      if g.id not in joined_ids and not g.member]
+                      if g.id not in joined_ids and not g.member
+                      and g.username.casefold() not in candidate_usernames]
         # Revisit known unjoined groups if Telegram returns fewer fresh results.
         # Each group still counts at most once and must pass current checks.
         candidates += [
             item['username'] for gid, item in state['groups'].items()
             if item.get('username') and item.get('member') is not True
+            and item['username'].casefold() not in candidate_usernames
             and int(gid) not in joined_ids and item.get('status') != 'irrelevant'
         ]
         for reference in dict.fromkeys(candidates):
@@ -412,6 +416,7 @@ class Engine:
             for candidate in extra:
                 if joins or len(new_examined) >= min(target * 4, 80):
                     break
-                if candidate.id in seen or candidate.id in joined_ids:
+                if (candidate.id in seen or candidate.id in joined_ids
+                        or candidate.username.casefold() in candidate_usernames):
                     continue
                 await examine(candidate.username or candidate.id, 'discovery_extended')

@@ -24,9 +24,9 @@ class Telegram:
         self.joined = self.sent = 0
         self.failure = False
     async def list_joined(self, limit):
-        return []
+        return [self.group] if self.group.member else []
     async def discover(self, keywords, limit, exclude_ids=None):
-        return [self.group]
+        return [] if self.group.id in (exclude_ids or set()) else [self.group]
     async def inspect(self, username):
         return self.group
     async def join(self, group):

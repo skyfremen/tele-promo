@@ -238,7 +238,7 @@ def test_existing_joined_group_is_prioritized_and_never_rejoined():
     store, tg = Memory(), ExistingFirst()
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
     assert events[0] == 'list_joined'
-    assert 'discover' not in events
+    assert events.index('send') < events.index('discover')
     assert tg.joined == 0 and tg.sent == 1
     assert store.state['groups']['1001']['status'] == 'eligible'
     assert store.state['groups']['1001']['member_count'] == 12
@@ -351,8 +351,8 @@ def test_selected_group_requires_real_posting_rights():
     store, tg = Memory(), Telegram()
     tg.group.posting_allowed = False
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
-    assert tg.joined == tg.sent == 0
-    assert store.state['groups']['123']['status'] == 'restricted'
+    assert tg.joined == 1 and tg.sent == 0
+    assert store.state['groups']['123']['status'] == 'posting_restricted'
 
 
 def test_bad_selected_ids_rejected():

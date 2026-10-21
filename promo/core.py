@@ -140,7 +140,9 @@ class Engine:
             elif not minimum_met:
                 status = 'member_count_unknown' if group.member_count is None else 'below_member_minimum'
             elif group.member:
-                status = 'eligible' if postable else 'joined_unselected'
+                status = ('eligible' if postable else
+                          'posting_restricted' if group.id in selected and not group.posting_allowed
+                          else 'joined_unselected')
             elif postable:
                 status = 'eligible'
             elif joinable:
@@ -173,7 +175,10 @@ class Engine:
                 if group.id != int(gid) or not group.member:
                     return
                 state['groups'][gid]['member'] = True
-                state['groups'][gid]['status'] = 'eligible' if postable else 'joined_unselected'
+                state['groups'][gid]['status'] = (
+                    'eligible' if postable else
+                    'posting_restricted' if group.id in selected and not group.posting_allowed
+                    else 'joined_unselected')
                 self.store.save(state)
             if not mutate or not postable or not group.member or not config['shorts']:
                 return

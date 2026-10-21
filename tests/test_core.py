@@ -23,6 +23,8 @@ class Telegram:
         self.group = group or Group(123, 'comedy_test', 'Comedy', RULES, '', True, False)
         self.joined = self.sent = 0
         self.failure = False
+    async def list_joined(self, limit):
+        return []
     async def discover(self, keywords, limit):
         return [self.group]
     async def inspect(self, username):
@@ -235,3 +237,127 @@ def test_exact_message_dry_run_cannot_post():
     store = Memory()
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=False))
     assert tg.joined == tg.sent == 0
+
+
+def test_existing_joined_group_is_prioritized_and_never_rejoined():
+    events = []
+    class ExistingFirst(Telegram):
+        def __init__(self):
+            super().__init__(Group(1001, '', 'Sub4Sub friends',
+                                   'Sub4Sub is welcome.', '', True, True,
+                                   member_count=12))
+        async def list_joined(self, limit):
+            events.append('list_joined')
+            return [self.group]
+        async def discover(self, keywords, limit):
+            events.append('discover')
+            return []
+        async def inspect(self, reference):
+            assert reference == self.group.id
+            events.append('inspect')
+            return self.group
+        async def send(self, group, text, random_id):
+            events.append('send')
+            return await super().send(group, text, random_id)
+    cfg = config()
+    cfg['dry_run'] = False
+    cfg['keywords'] = ['sub4sub']
+    cfg['limits']['min_group_members'] = 100
+    store, tg = Memory(), ExistingFirst()
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
+    assert events[0] == 'list_joined'
+    assert 'discover' not in events
+    assert tg.joined == 0 and tg.sent == 1
+    assert store.state['groups']['1001']['status'] == 'eligible'
+    assert store.state['groups']['1001']['member_count'] == 12
+    assert store.state['groups']['1001']['source'] == 'already_joined'
+
+
+def test_below_threshold_or_unknown_members_are_never_joined():
+    class CountedDiscovery(Telegram):
+        def __init__(self, count):
+            super().__init__(Group(1002, 'sub_for_sub_group', 'Sub4Sub',
+                                   'Sub4Sub is welcome.', '', True, False,
+                                   member_count=count))
+        async def list_joined(self, limit):
+            return []
+    for count, expected in [(99, 'below_member_minimum'),
+                             (None, 'member_count_unknown')]:
+        cfg = config()
+        cfg['dry_run'] = False
+        cfg['keywords'] = ['sub4sub']
+        cfg['limits']['min_group_members'] = 100
+        store, tg = Memory(), CountedDiscovery(count)
+        asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
+        assert tg.joined == 0 and tg.sent == 0
+        assert store.state['groups']['1002']['status'] == expected
+
+
+def test_meets_minimum_new_group_can_join():
+    class CountedDiscovery(Telegram):
+        async def list_joined(self, limit):
+            return []
+    cfg = config()
+    cfg['dry_run'] = False
+    cfg['keywords'] = ['sub4sub']
+    cfg['limits']['min_group_members'] = 100
+    group = Group(1003, 'sub4sub_group', 'Sub4Sub',
+                  'Sub4Sub is welcome.', '', True, False, member_count=100)
+    store, tg = Memory(), CountedDiscovery(group)
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
+    assert tg.joined == tg.sent == 1
+
+
+def test_dry_run_scans_joined_first_without_global_search_when_eligible():
+    class Existing(Telegram):
+        def __init__(self):
+            super().__init__(Group(1004, 'sub4sub_existing', 'Sub4Sub',
+                                   'Sub4Sub is welcome.', '', True, True))
+            self.searches = 0
+        async def list_joined(self, limit):
+            return [self.group]
+        async def discover(self, keywords, limit):
+            self.searches += 1
+            return []
+    cfg = config()
+    cfg['keywords'] = ['sub4sub']
+    store, tg = Memory(), Existing()
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=False))
+    assert tg.joined == tg.sent == 0
+    assert tg.searches == 0
+
+
+def test_joined_scan_rotates_over_unrelated_group_titles():
+    class ManyExisting(Telegram):
+        def __init__(self):
+            super().__init__()
+            self.checked = []
+        async def list_joined(self, limit):
+            return [Group(2001, 'first', 'General A', '', '', True, True),
+                    Group(2002, 'second', 'General B', '', '', True, True)]
+        async def inspect(self, ref):
+            self.checked.append(ref)
+            return Group(2001 if ref == 'first' else 2002, ref,
+                         'General', '', '', True, True)
+        async def discover(self, keywords, limit):
+            return []
+    cfg = config()
+    cfg['keywords'] = ['sub4sub']
+    cfg['limits']['joined_inspect_limit'] = 1
+    store, tg = Memory(), ManyExisting()
+    engine = Engine(tg, store, cfg, now=lambda: NOW)
+    asyncio.run(engine.run(live=False))
+    asyncio.run(engine.run(live=False))
+    assert tg.checked[:2] == ['first', 'second']
+
+
+def test_minimum_group_member_config_is_validated():
+    from promo.core import validate_config
+    for invalid in [-1, 1000001, '100', True]:
+        cfg = config()
+        cfg['limits']['min_group_members'] = invalid
+        with pytest.raises(ValueError):
+            validate_config(cfg)
+    cfg = config()
+    cfg['limits']['min_group_members'] = 500
+    assert validate_config(cfg) == cfg

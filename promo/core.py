@@ -97,13 +97,13 @@ def validate_config(config):
                 raise ValueError('Message must contain 1 to 1024 characters')
             # Preserve exact wording and line breaks, while verifying that the
             # single embedded YouTube URL identifies the configured video.
-            links = re.findall(r'https?://[^\\s<>]+', message, re.I)
+            links = re.findall(r'https?://[^\s<>]+', message, re.I)
             if len(links) != 1 or video_id(links[0]) != video_id(short['url']):
                 raise ValueError('Message must include only the configured YouTube URL')
         else:
             if not isinstance(short.get('caption'), str) or not 1 <= len(short['caption']) <= 500:
                 raise ValueError('Caption must contain 1 to 500 characters')
-            if re.search(r'https?://|t\\.me/', short['caption'], re.I):
+            if re.search(r'https?://|t\.me/', short['caption'], re.I):
                 raise ValueError('Put the sole promotional URL in the url field')
     return config
 

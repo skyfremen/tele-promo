@@ -797,3 +797,72 @@ def test_candidate_list_never_used_for_manual_sending():
     tg.group.member = True
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='send'))
     assert tg.sent == 1 and tg.joined == 0
+
+
+def test_unattempted_join_candidate_prioritized_over_20_pending_and_recent_review():
+    """An eligible candidate past the per-run cap must be retried next run."""
+    class CandidateStore(Memory):
+        def __init__(self):
+            super().__init__()
+            self.candidates = {'candidates': [
+                {'url': f'https://t.me/pending_group_{i}', 'status': 'pending'}
+                for i in range(21)
+            ] + [{
+                'url': 'https://t.me/comedy_test', 'status': 'join_candidate',
+                'group_id': 123, 'last_checked_at': NOW - 60,
+            }]}
+            self.state['groups']['123'] = {
+                'username': 'comedy_test', 'member': False,
+                'join_attempted_at': 0, 'status': 'join_candidate',
+            }
+        def load_candidates(self):
+            return deepcopy(self.candidates)
+        def save_candidates(self, document):
+            self.candidates = deepcopy(document)
+
+    class TrackTelegram(Telegram):
+        def __init__(self):
+            super().__init__()
+            self.inspected = []
+        async def inspect(self, reference):
+            self.inspected.append(reference)
+            if reference == 'comedy_test':
+                return self.group
+            return Group(500, reference, 'Unrelated', '', '', True, False,
+                         member_count=100)
+
+    cfg = config()
+    cfg['dry_run'] = False
+    store, tg = CandidateStore(), TrackTelegram()
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='join'))
+    assert tg.inspected[0] == 'comedy_test'
+    assert tg.joined == 1 and tg.sent == 0
+    assert store.candidates['candidates'][-1]['status'] == 'joined'
+    assert store.candidates['candidates'][-1]['group_id'] == 123
+    assert store.state['groups']['123']['member'] is True
+
+
+def test_recent_join_attempt_keeps_cooldown_even_if_candidate_is_join_candidate():
+    class CandidateStore(Memory):
+        def __init__(self):
+            super().__init__()
+            self.candidates = {'candidates': [{
+                'url': 'https://t.me/comedy_test', 'status': 'join_candidate',
+                'group_id': 123, 'last_checked_at': NOW - 60,
+            }]}
+            self.state['groups']['123'] = {
+                'username': 'comedy_test', 'member': False,
+                'join_attempted_at': NOW - 60, 'status': 'join_candidate',
+            }
+        def load_candidates(self):
+            return deepcopy(self.candidates)
+        def save_candidates(self, document):
+            self.candidates = deepcopy(document)
+
+    cfg = config()
+    cfg['dry_run'] = False
+    store, tg = CandidateStore(), Telegram()
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='join'))
+    assert tg.joined == tg.sent == 0
+    assert store.state['groups']['123']['join_attempted_at'] == NOW - 60
+    assert store.candidates['candidates'][0]['status'] == 'join_candidate'

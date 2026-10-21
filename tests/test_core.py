@@ -140,12 +140,13 @@ def test_persistent_daily_limit_applies_to_all_groups():
     assert tg.sent == 0
 
 
-def test_posting_restrictions_do_not_prevent_join_but_block_sending():
+def test_read_only_groups_are_not_joined_or_posted():
     store, tg, cfg = Memory(), Telegram(), config()
     cfg['dry_run'] = False
     tg.group.posting_allowed = False
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
-    assert tg.joined == 1 and tg.sent == 0
+    assert tg.joined == tg.sent == 0
+    assert store.state['groups']['123']['status'] == 'messaging_disabled'
 
 
 def test_approved_group_minimum_cooldown_is_respected():
@@ -351,8 +352,8 @@ def test_selected_group_requires_real_posting_rights():
     store, tg = Memory(), Telegram()
     tg.group.posting_allowed = False
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
-    assert tg.joined == 1 and tg.sent == 0
-    assert store.state['groups']['123']['status'] == 'posting_restricted'
+    assert tg.joined == tg.sent == 0
+    assert store.state['groups']['123']['status'] == 'messaging_disabled'
 
 
 def test_bad_selected_ids_rejected():
@@ -380,7 +381,7 @@ def test_manually_selected_new_group_bypasses_rule_text_classification():
     assert tg.joined == tg.sent == 1
 
 
-def test_join_without_selection_or_shorts_and_no_message_send():
+def test_read_only_group_is_rejected_without_selection_or_shorts():
     cfg = config()
     cfg['dry_run'] = False
     cfg['shorts'] = []
@@ -392,9 +393,9 @@ def test_join_without_selection_or_shorts_and_no_message_send():
               rules_complete=False, posting_allowed=False, member_count=800)
     store, tg = Memory(), Telegram(g)
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
-    assert tg.joined == 1 and tg.sent == 0
-    assert store.state['groups']['7000']['member'] is True
-    assert store.state['groups']['7000']['status'] == 'joined_unselected'
+    assert tg.joined == tg.sent == 0
+    assert store.state['groups']['7000']['member'] is False
+    assert store.state['groups']['7000']['status'] == 'messaging_disabled'
     assert not store.state['posts']
 
 
@@ -471,3 +472,56 @@ def test_no_public_username_cannot_trigger_automated_join():
     store, tg = Memory(), Telegram(group)
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
     assert tg.joined == tg.sent == 0
+
+
+def test_join_without_shorts_only_for_writable_groups():
+    cfg = config()
+    cfg['dry_run'] = False
+    cfg['shorts'] = []
+    cfg['selected_groups'] = []
+    cfg['keywords'] = ['sub4sub']
+    cfg['limits']['min_group_members'] = 500
+    g = Group(7300, 'writeable_sub4sub', 'Sub4Sub', '', '', True, False,
+              posting_allowed=True, member_count=700)
+    store, tg = Memory(), Telegram(g)
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
+    assert tg.joined == 1 and tg.sent == 0
+    assert store.state['groups']['7300']['status'] == 'joined_unselected'
+    assert store.state['groups']['7300']['messaging_allowed']
+
+
+def test_member_specific_read_only_rights_block_posting_after_join():
+    class MemberBannedTelegram(Telegram):
+        async def can_post(self, group):
+            return False
+    cfg = config()
+    cfg['dry_run'] = False
+    cfg['keywords'] = ['sub4sub']
+    cfg['selected_groups'] = [7301]
+    g = Group(7301, 'sub4sub_member_restricted', 'Sub4Sub',
+              '', '', True, False, posting_allowed=True, member_count=800)
+    store, tg = Memory(), MemberBannedTelegram(g)
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
+    assert tg.joined == 1 and tg.sent == 0
+    assert store.state['groups']['7301']['status'] == 'messaging_disabled'
+    assert store.state['groups']['7301']['messaging_allowed'] is False
+
+
+def test_existing_member_specific_read_only_rights_are_recorded():
+    class ExistingReadOnly(Telegram):
+        def __init__(self):
+            super().__init__(Group(7302, 'sub4sub_read_only', 'Sub4Sub',
+                                   '', '', True, True, posting_allowed=True,
+                                   member_count=500))
+        async def list_joined(self, limit):
+            return [self.group]
+        async def can_post(self, group):
+            return False
+    cfg = config()
+    cfg['dry_run'] = False
+    cfg['keywords'] = ['sub4sub']
+    cfg['selected_groups'] = [7302]
+    store, tg = Memory(), ExistingReadOnly()
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
+    assert tg.joined == tg.sent == 0
+    assert store.state['groups']['7302']['status'] == 'messaging_disabled'

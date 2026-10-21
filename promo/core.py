@@ -128,10 +128,17 @@ class Engine:
             denied = group.id in state.get('denied_groups', [])
             minimum_met = (group.member or
                            (type(group.member_count) is int and group.member_count >= min_members))
+            # Do not join read-only groups. Default rights can be inspected
+            # before joining; member-specific rights require a second check
+            # once already joined.
+            can_message = bool(group.posting_allowed)
+            if group.member and can_message:
+                can_message = bool(await self.tg.can_post(group))
             joinable = (not denied and relevant and group.is_group
-                        and not group.member and bool(group.username) and minimum_met)
+                        and not group.member and bool(group.username)
+                        and minimum_met and can_message)
             postable = (not denied and relevant and group.is_group
-                        and group.id in selected and group.posting_allowed)
+                        and group.id in selected and can_message)
             previous = state['groups'].get(gid, {})
             if not relevant:
                 status = 'irrelevant'
@@ -139,10 +146,10 @@ class Engine:
                 status = 'restricted'
             elif not minimum_met:
                 status = 'member_count_unknown' if group.member_count is None else 'below_member_minimum'
+            elif not can_message:
+                status = 'messaging_disabled'
             elif group.member:
-                status = ('eligible' if postable else
-                          'posting_restricted' if group.id in selected and not group.posting_allowed
-                          else 'joined_unselected')
+                status = 'eligible' if postable else 'joined_unselected'
             elif postable:
                 status = 'eligible'
             elif joinable:
@@ -154,6 +161,7 @@ class Engine:
                 'about': group.about, 'pinned': group.pinned,
                 'rules_hash': rules_hash(group), 'rules_complete': group.rules_complete,
                 'member': group.member, 'member_count': group.member_count,
+                'messaging_allowed': can_message,
                 'source': source, 'seen_at': self.now(), 'status': status,
                 'join_attempted_at': previous.get('join_attempted_at', 0),
             }
@@ -174,11 +182,17 @@ class Engine:
                 group = await self.tg.inspect(group.username)
                 if group.id != int(gid) or not group.member:
                     return
+                # Telegram may impose member-specific restrictions after join.
+                # Recheck actual membership rights and record any restriction.
+                can_message = (bool(group.posting_allowed)
+                               and bool(await self.tg.can_post(group)))
+                postable = (not denied and relevant and group.is_group
+                            and group.id in selected and can_message)
                 state['groups'][gid]['member'] = True
+                state['groups'][gid]['messaging_allowed'] = can_message
                 state['groups'][gid]['status'] = (
-                    'eligible' if postable else
-                    'posting_restricted' if group.id in selected and not group.posting_allowed
-                    else 'joined_unselected')
+                    'messaging_disabled' if not can_message else
+                    'eligible' if postable else 'joined_unselected')
                 self.store.save(state)
             if not mutate or not postable or not group.member or not config['shorts']:
                 return

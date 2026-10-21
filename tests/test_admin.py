@@ -1,6 +1,6 @@
 import copy
 import pytest
-from promo.admin import parse_shorts, update_settings, summary, set_live
+from promo.admin import parse_shorts, update_settings, summary, set_live, select_groups, clear_selection
 from promo.store import validate_state
 
 
@@ -8,7 +8,7 @@ def base_state():
     return {
         "version": 1,
         "config": {"dry_run": False, "keywords": ["original comedy"],
-                   "shorts": [], "approved_groups": [],
+                   "shorts": [], "approved_groups": [], "selected_groups": [123],
                    "limits": {"discovery_results": 5, "joins_per_run": 1,
                               "posts_per_run": 1, "posts_per_day": 2,
                               "cooldown_hours": 48}},
@@ -72,3 +72,29 @@ def test_activation_requires_explicit_double_consent_and_discovery():
     state["groups"].clear()
     with pytest.raises(ValueError):
         set_live(state, True, confirmed=True, switch_enabled=True)
+
+
+def test_selection_requires_confirmation_and_discovered_ids():
+    prior = base_state()
+    with pytest.raises(ValueError):
+        select_groups(prior, "123")
+    with pytest.raises(ValueError):
+        select_groups(prior, "999", confirmed=True)
+    with pytest.raises(ValueError):
+        select_groups(prior, "123,123", confirmed=True)
+    updated = select_groups(prior, "123", confirmed=True)
+    assert updated["config"]["selected_groups"] == [123]
+    assert updated["config"]["dry_run"] is True
+    assert updated["posts"] == prior["posts"]
+    assert prior["config"]["dry_run"] is False
+    cleared = clear_selection(updated)
+    assert cleared["config"]["selected_groups"] == []
+    assert cleared["config"]["dry_run"] is True
+
+
+def test_live_requires_selected_groups():
+    prior = base_state()
+    prior["config"]["shorts"] = parse_shorts("https://youtu.be/abcdefghijk")
+    prior["config"]["selected_groups"] = []
+    with pytest.raises(ValueError):
+        set_live(prior, True, confirmed=True, switch_enabled=True)

@@ -9,7 +9,7 @@ NOW = 1_800_000_000
 RULES = 'YouTube Shorts promotion is allowed.'
 
 def config():
-    return {'dry_run': True, 'keywords': ['comedy'], 'shorts': [{'url': 'https://youtube.com/shorts/abcdefghijk', 'caption': 'Original comedy'}], 'limits': {'joins_per_run': 1, 'posts_per_run': 1, 'posts_per_day': 2, 'cooldown_hours': 48, 'discovery_results': 5}, 'approved_groups': []}
+    return {'dry_run': True, 'keywords': ['comedy'], 'shorts': [{'url': 'https://youtube.com/shorts/abcdefghijk', 'caption': 'Original comedy'}], 'limits': {'joins_per_run': 1, 'posts_per_run': 1, 'posts_per_day': 2, 'cooldown_hours': 48, 'discovery_results': 5}, 'approved_groups': [], 'selected_groups': [123,456,1001,1002,1003,1004]}
 
 class Memory:
     def __init__(self):
@@ -139,7 +139,7 @@ def test_revocation_overrides_explicit_public_rule():
     assert tg.sent == tg.joined == 0
 
 
-def test_rules_change_after_join_blocks_post():
+def test_manual_selection_not_rule_text_controls_posting():
     store, tg, cfg = Memory(), Telegram(), config()
     cfg['dry_run'] = False
     original = tg.join
@@ -148,7 +148,7 @@ def test_rules_change_after_join_blocks_post():
         tg.group.about = 'No promotion'
     tg.join = join
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
-    assert tg.joined == 1 and tg.sent == 0
+    assert tg.joined == 1 and tg.sent == 1
 
 
 def test_persistent_daily_limit_applies_to_all_groups():
@@ -361,3 +361,48 @@ def test_minimum_group_member_config_is_validated():
     cfg = config()
     cfg['limits']['min_group_members'] = 500
     assert validate_config(cfg) == cfg
+
+
+def test_unselected_group_never_joins_or_posts_even_when_rules_allow():
+    cfg = config()
+    cfg['dry_run'] = False
+    cfg['selected_groups'] = []
+    store, tg = Memory(), Telegram()
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
+    assert tg.joined == tg.sent == 0
+    assert store.state['groups']['123']['status'] == 'not_selected'
+
+
+def test_selected_group_requires_real_posting_rights():
+    cfg = config()
+    cfg['dry_run'] = False
+    store, tg = Memory(), Telegram()
+    tg.group.posting_allowed = False
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
+    assert tg.joined == tg.sent == 0
+    assert store.state['groups']['123']['status'] == 'restricted'
+
+
+def test_bad_selected_ids_rejected():
+    from promo.core import validate_config
+    for selection in [[123, 123], ['123'], [0], [True], '123', list(range(101))]:
+        cfg = config()
+        cfg['selected_groups'] = selection
+        with pytest.raises(ValueError):
+            validate_config(cfg)
+
+
+def test_manually_selected_new_group_bypasses_rule_text_classification():
+    cfg = config()
+    cfg['dry_run'] = False
+    cfg['keywords'] = ['sub4sub']
+    cfg['selected_groups'] = [1005]
+    g = Group(1005, 'sub4sub_private_ok', 'Sub4Sub community',
+              'Rules to be checked with group admin externally',
+              '', True, False, rules_complete=False, member_count=800)
+    class Selected(Telegram):
+        async def list_joined(self, limit):
+            return []
+    store, tg = Memory(), Selected(g)
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
+    assert tg.joined == tg.sent == 1

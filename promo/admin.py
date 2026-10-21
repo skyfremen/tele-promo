@@ -93,8 +93,9 @@ def set_live(state, enable, confirmed=False, switch_enabled=False):
             raise ValueError("Live posting requires explicit confirmation and LIVE_ENABLED")
         if not revised["config"]["shorts"]:
             raise ValueError("Configure at least one Shorts URL before activation")
-        if not revised["config"].get("selected_groups"):
-            raise ValueError("Select known groups after obtaining permission separately")
+        selected = revised["config"].get("selected_groups", [])
+        if not selected or any(str(gid) not in revised["groups"] for gid in selected):
+            raise ValueError("Select discovered groups after obtaining permission separately")
     revised["config"]["dry_run"] = not enable
     revised["config"] = validate_config(revised["config"])
     return revised

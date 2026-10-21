@@ -548,6 +548,9 @@ def test_discovery_excludes_existing_memberships_from_ten_group_target():
             return list(self.groups.values())
         async def inspect(self, reference):
             self.inspected.append(reference)
+            if reference == 'sub4sub_old':
+                return Group(123, 'sub4sub_old', 'Sub4Sub old', '', '',
+                             True, True, member_count=1000)
             return self.groups[reference]
         async def join(self, group):
             self.joined += 1
@@ -562,7 +565,7 @@ def test_discovery_excludes_existing_memberships_from_ten_group_target():
     store, tg = Memory(), NewGroups()
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
     assert tg.seen_exclusions == {123}
-    assert len(set(tg.inspected)) == 10 + 2
+    assert len(set(tg.inspected)) == 11
     assert tg.joined == 2 and tg.sent == 0
     assert len([g for g in store.state['groups'].values() if g['source'] == 'discovery']) == 10
 

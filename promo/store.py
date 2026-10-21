@@ -19,6 +19,16 @@ def validate_state(state):
     return state
 
 
+
+def validate_candidates(document):
+    if not isinstance(document, dict) or not isinstance(document.get('candidates'), list):
+        raise ValueError('Invalid candidate list; refusing to overwrite')
+    if any(not isinstance(item, dict) or not isinstance(item.get('url'), str)
+           for item in document['candidates']):
+        raise ValueError('Invalid candidate entry')
+    return document
+
+
 class GitHubStore:
     def __init__(self):
         repo = os.environ['STATE_REPO']
@@ -68,3 +78,33 @@ class GitHubStore:
         result = self.request('PUT', self.base + '/contents/state.json', payload)
         self.sha = result['content']['sha']
         self.state = state
+
+    def load_candidates(self):
+        """Load the one growing list only when the discovery workflow needs it."""
+        self.candidate_sha = None
+        url = self.base + '/contents/candidate-groups.json?ref=' + self.branch
+        try:
+            obj = self.request('GET', url)
+        except HTTPError as exc:
+            if exc.code != 404:
+                raise
+            return {'candidates': []}
+        self.candidate_sha = obj['sha']
+        return validate_candidates(json.loads(base64.b64decode(obj['content'])))
+
+    def save_candidates(self, document):
+        """Compare-and-swap so a concurrent ChatGPT append is never overwritten."""
+        validate_candidates(document)
+        if self.request('GET', self.base).get('private') is not True:
+            raise ValueError('Candidate repository is no longer private')
+        payload = {
+            'message': 'Update Telegram candidate review statuses',
+            'branch': self.branch,
+            'content': base64.b64encode(
+                json.dumps(document, ensure_ascii=False, indent=2).encode()
+            ).decode(),
+        }
+        if self.candidate_sha:
+            payload['sha'] = self.candidate_sha
+        result = self.request('PUT', self.base + '/contents/candidate-groups.json', payload)
+        self.candidate_sha = result['content']['sha']

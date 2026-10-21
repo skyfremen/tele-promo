@@ -15,7 +15,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   promote:
-    if: github.ref == 'refs/heads/main' && vars.AUTOMATION_ENABLED == 'true'
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.AUTOMATION_ENABLED == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: telegram

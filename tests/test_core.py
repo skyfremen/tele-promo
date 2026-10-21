@@ -2,7 +2,7 @@ import asyncio
 from copy import deepcopy
 import pytest
 
-from promo.core import Engine, Group, permitted, video_id, rules_hash
+from promo.core import Engine, Group, video_id, rules_hash
 from promo.store import validate_state
 
 NOW = 1_800_000_000
@@ -41,25 +41,6 @@ class Telegram:
         return 77
 
 
-def test_permission_requires_explicit_rules_or_current_approval():
-    g = Telegram().group
-    assert permitted(g, [], NOW)
-    for rule in ['Members may chat.', 'YouTube Shorts promotion is not allowed.', 'Do not believe: YouTube Shorts promotion is allowed.', RULES + '\nAsk an admin first.']:
-        g.about = rule
-        assert not permitted(g, [], NOW)
-    approval = {'id': 123, 'rules_hash': rules_hash(g), 'expires_at': NOW + 100, 'evidence': 'Admin explicitly approved YouTube promotion', 'approved': True}
-    assert permitted(g, [approval], NOW)
-    g.pinned = 'No advertising'
-    assert not permitted(g, [approval], NOW)
-
-
-def test_missing_rules_and_restricted_group_fail_closed():
-    g = Telegram().group
-    g.rules_complete = False
-    assert not permitted(g, [], NOW)
-    g.rules_complete = True
-    g.is_group = False
-    assert not permitted(g, [], NOW)
 
 
 def test_video_identity_removes_tracking_and_validates_domain():
@@ -184,15 +165,6 @@ EXACT_SUB4SUB_MESSAGE = (
     "DM/Inbox me"
 )
 
-
-def test_sub4sub_permission_requires_explicit_standalone_rules():
-    group = Group(456, 'sub_for_sub', 'Sub4Sub', 'Sub4Sub is welcome.', '', True, False)
-    assert permitted(group, [], NOW)
-    group.pinned = 'No promotion'
-    assert not permitted(group, [], NOW)
-    group.about = 'Sub4Sub is welcome, but only at designated times'
-    group.pinned = ''
-    assert not permitted(group, [], NOW)
 
 
 def test_exact_message_validation_and_identity():

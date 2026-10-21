@@ -1,4 +1,4 @@
-"""Permission gates and write-ahead posting ledger; no Telegram-specific policy."""
+"""Operator-selected group targets and write-ahead posting ledger."""
 from dataclasses import dataclass
 import hashlib
 import json
@@ -44,31 +44,6 @@ def video_id(url):
     if not re.fullmatch(r'[A-Za-z0-9_-]{11}', value):
         raise ValueError('Invalid YouTube video ID')
     return value
-
-
-def permitted(group, approvals, now):
-    if not group.is_group or not group.rules_complete or not group.posting_allowed:
-        return False
-    # Automatic permission is deliberately limited to an entire, unqualified
-    # rules source. Additional text, linked rules, or conditions require review.
-    sources = [s.strip() for s in (group.about, group.pinned) if s.strip()]
-    explicit = {
-        'youtube shorts promotion is allowed.',
-        'youtube shorts promotion is welcome.',
-        'sub4sub is allowed.',
-        'sub4sub is welcome.',
-        'sub4sub links are allowed.',
-        'sub4sub links are welcome.',
-    }
-    if sources and all(s.lower() in explicit for s in sources):
-        return True
-    return any(
-        a.get('id') == group.id and a.get('approved') is True
-        and a.get('rules_hash') == rules_hash(group)
-        and isinstance(a.get('expires_at'), (int, float)) and a['expires_at'] > now
-        and bool(a.get('evidence', '').strip())
-        for a in approvals
-    )
 
 
 def validate_config(config):

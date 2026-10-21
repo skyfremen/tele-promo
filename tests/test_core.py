@@ -725,3 +725,74 @@ def test_extended_discovery_stops_when_no_new_candidates():
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='join'))
     assert tg.calls == 2
     assert tg.joined == tg.sent == 0
+
+
+def test_candidate_links_review_before_discovery_and_status_saved():
+    from promo.core import public_group_username, has_promotion_permission
+    assert public_group_username('https://t.me/Comedy_test/') == 'Comedy_test'
+    for url in ('http://t.me/comedy_test', 'https://t.me/+invite',
+                'https://t.me/comedy_test/123', 'https://example.com/comedy_test'):
+        with pytest.raises(ValueError):
+            public_group_username(url)
+    assert has_promotion_permission(Group(1, 'comedy_test', 'Comedy', RULES, '', True, False))
+    assert not has_promotion_permission(
+        Group(1, 'comedy_test', 'Comedy', 'No YouTube promotion allowed.', '', True, False))
+
+    class CandidateStore(Memory):
+        def __init__(self):
+            super().__init__()
+            self.candidates = {'candidates': [
+                {'url': 'https://t.me/comedy_test', 'source': 'chatgpt', 'status': 'pending'}]}
+        def load_candidates(self):
+            return deepcopy(self.candidates)
+        def save_candidates(self, document):
+            self.candidates = deepcopy(document)
+
+    class CandidateFirst(Telegram):
+        async def discover(self, keywords, limit, exclude_ids=None):
+            assert self.joined == 1  # Candidate processing precedes search.
+            return []
+    cfg = config()
+    cfg['dry_run'] = False
+    store, tg = CandidateStore(), CandidateFirst()
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='join'))
+    entry = store.candidates['candidates'][0]
+    assert entry['status'] == 'joined' and entry['group_id'] == 123
+    assert tg.joined == 1 and tg.sent == 0
+
+
+def test_candidate_without_explicit_permission_cannot_rejoin_via_discovery():
+    class CandidateStore(Memory):
+        def __init__(self):
+            super().__init__()
+            self.candidates = {'candidates': [
+                {'url': 'https://t.me/comedy_test', 'status': 'pending'},
+                {'url': 'https://t.me/Comedy_Test', 'status': 'pending'}]}
+        def load_candidates(self):
+            return deepcopy(self.candidates)
+        def save_candidates(self, document):
+            self.candidates = deepcopy(document)
+    cfg = config()
+    cfg['dry_run'] = False
+    g = Group(123, 'comedy_test', 'Comedy', 'No YouTube promotion allowed.',
+              '', True, False, member_count=900)
+    store, tg = CandidateStore(), Telegram(g)
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='join'))
+    assert tg.joined == tg.sent == 0
+    assert store.candidates['candidates'][0]['status'] == 'promotion_unverified'
+    assert store.candidates['candidates'][1]['status'] == 'duplicate'
+    # The same group cannot be silently joined through ordinary discovery.
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW + 100).run(live=True, mode='join'))
+    assert tg.joined == 0
+
+
+def test_candidate_list_never_used_for_manual_sending():
+    class CandidateStore(Memory):
+        def load_candidates(self):
+            raise AssertionError('Manual sending must not read candidate links')
+    cfg = config()
+    cfg['dry_run'] = False
+    store, tg = CandidateStore(), Telegram()
+    tg.group.member = True
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='send'))
+    assert tg.sent == 1 and tg.joined == 0

@@ -590,3 +590,42 @@ def test_discovery_in_dry_run_still_runs_with_existing_selected_group():
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=False))
     assert tg.discovered_count == 1
     assert tg.joined == tg.sent == 0
+
+
+def test_telegram_discovery_deduplicates_and_excludes_joined_ids(monkeypatch):
+    from types import SimpleNamespace
+    import promo.telegram as telegram_mod
+
+    class FakeChannel:
+        def __init__(self, gid, joined=False):
+            self.id = gid
+            self.username = f'sub4sub_{gid}'
+            self.title = f'Sub4Sub {gid}'
+            self.megagroup = True
+            self.scam = self.fake = self.restricted = False
+            self.left = not joined
+            self.participants_count = 800
+
+    class FakeClient:
+        def __init__(self):
+            self.queries = []
+        async def __call__(self, request):
+            self.queries.append((request.q, request.limit))
+            if request.q == 'first':
+                groups = [FakeChannel(101), FakeChannel(102),
+                          FakeChannel(103, joined=True)]
+                groups += [FakeChannel(gid) for gid in range(200, 208)]
+            else:
+                groups = [FakeChannel(gid) for gid in range(200, 211)]
+            return SimpleNamespace(chats=groups)
+
+    monkeypatch.setattr(telegram_mod.types, 'Channel', FakeChannel)
+    telegram = object.__new__(telegram_mod.Telegram)
+    telegram.client = FakeClient()
+    groups = asyncio.run(telegram.discover(['first', 'second', 'third'], 10,
+                                            exclude_ids={101, 102}))
+    assert len(groups) == 10
+    assert len({g.id for g in groups}) == 10
+    assert all(not g.member for g in groups)
+    assert {g.id for g in groups} == set(range(200, 210))
+    assert telegram.client.queries == [('first', 20), ('second', 20)]

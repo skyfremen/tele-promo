@@ -46,6 +46,37 @@ def video_id(url):
     return value
 
 
+def public_group_username(url):
+    """Accept only public Telegram group links; never invite or message links."""
+    if not isinstance(url, str):
+        raise ValueError('Candidate URL must be a string')
+    parsed = urlparse(url)
+    if (parsed.scheme != 'https' or parsed.hostname not in ('t.me', 'telegram.me')
+            or parsed.username or parsed.password or parsed.port
+            or parsed.query or parsed.fragment):
+        raise ValueError('Not a public Telegram group link')
+    name = parsed.path.strip('/')
+    if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]{4,31}', name):
+        raise ValueError('Not a public Telegram group username')
+    if name.lower() in ('joinchat', 'share', 'proxy', 'addstickers'):
+        raise ValueError('Unsupported Telegram link')
+    return name
+
+
+def has_promotion_permission(group):
+    """Require affirmative promotion rules, not merely the ability to send."""
+    if not group.rules_complete:
+        return False
+    rules = (group.about + '\\n' + group.pinned).lower()
+    subject = r'(?:promot(?:ion|ions|e)?|advertis(?:e|ing|ements?)?|youtube|shorts|videos?|channels?|links?|sub4sub)'
+    deny = r'\\b(?:no|not|never|banned?|forbidden|prohibited?)\\b.{0,45}\\b' + subject
+    if re.search(deny, rules):
+        return False
+    action = r'(?:allow(?:ed)?|welcom(?:e|ed)|permit(?:ted)?|share|post(?:ing)?|drop|promote)'
+    return bool(re.search(r'\\b' + action + r'\\b.{0,70}\\b' + subject + r'\\b', rules)
+                or re.search(r'\\b' + subject + r'\\b.{0,70}\\b' + action + r'\\b', rules))
+
+
 def validate_config(config):
     if not isinstance(config, dict) or type(config.get('dry_run')) is not bool:
         raise ValueError('dry_run must be boolean')
@@ -109,9 +140,9 @@ class Engine:
         new_examined = set()
         keywords = [k.lower() for k in config['keywords']]
 
-        async def examine(reference, source):
+        async def examine(reference, source, candidate=False):
             nonlocal joins, posts
-            group = await self.tg.inspect(reference)
+            group = reference if isinstance(reference, Group) else await self.tg.inspect(reference)
             if group.id in seen:
                 return
             seen.add(group.id)
@@ -136,9 +167,10 @@ class Engine:
             can_message = bool(group.posting_allowed)
             if group.member and can_message:
                 can_message = bool(await self.tg.can_post(group))
+            permission_ok = not candidate or has_promotion_permission(group)
             joinable = (not denied and relevant and group.is_group
                         and not group.member and bool(group.username)
-                        and minimum_met and can_message)
+                        and minimum_met and can_message and permission_ok)
             postable = (not denied and relevant and group.is_group
                         and group.member and can_message)
             previous = state['groups'].get(gid, {})
@@ -150,6 +182,8 @@ class Engine:
                 status = 'member_count_unknown' if group.member_count is None else 'below_member_minimum'
             elif not can_message:
                 status = 'messaging_disabled'
+            elif candidate and not group.member and not permission_ok:
+                status = 'promotion_unverified'
             elif group.member:
                 status = 'eligible' if postable else 'joined_unselected'
             elif joinable:
@@ -291,6 +325,62 @@ class Engine:
                 if saved.get('username') and saved.get('member') is True:
                     await examine(saved['username'], 'send_joined')
             return
+
+        # Candidate links supplied by ChatGPT are reviewed before Telegram search.
+        # The candidate file is independent of state.json and is never truncated.
+        if mode != 'send' and hasattr(self.store, 'load_candidates'):
+            candidate_doc = self.store.load_candidates()
+            changed = False
+            checked = 0
+            usernames = set()
+            for entry in candidate_doc['candidates']:
+                if checked >= 20:
+                    break  # Bound API lookups without starving normal discovery.
+                url = entry['url']
+                try:
+                    username = public_group_username(url)
+                except ValueError:
+                    if entry.get('status') != 'invalid_url':
+                        entry['status'] = 'invalid_url'
+                        changed = True
+                    continue
+                key = username.casefold()
+                if key in usernames:
+                    if entry.get('status') != 'duplicate':
+                        entry['status'] = 'duplicate'
+                        changed = True
+                    continue
+                usernames.add(key)
+                # Recheck rejections weekly; never rejoin known members.
+                if entry.get('status') in ('joined', 'duplicate', 'invalid_url'):
+                    continue
+                last = entry.get('last_checked_at', 0)
+                if (type(last) in (float, int) and last > self.now() - 7 * 86400
+                        and entry.get('status') not in (None, 'pending', 'lookup_failed')):
+                    continue
+                already = next((int(gid) for gid, saved in state['groups'].items()
+                                if saved.get('username', '').casefold() == key
+                                and saved.get('member') is True), None)
+                if already is not None:
+                    entry.update(status='joined', group_id=already,
+                                 last_checked_at=self.now())
+                    changed = True
+                    continue
+                checked += 1
+                try:
+                    group = await self.tg.inspect(username)
+                except ValueError:
+                    entry.update(status='lookup_failed', last_checked_at=self.now())
+                    changed = True
+                    continue
+                await examine(group, 'candidate_file', candidate=True)
+                saved = state['groups'].get(str(group.id))
+                if saved:
+                    entry.update(group_id=group.id, last_checked_at=self.now(),
+                                 status='joined' if saved['member'] else saved['status'])
+                    changed = True
+            if changed:
+                self.store.save_candidates(candidate_doc)
 
         # Pass 2: inspect up to the configured number of distinct, unjoined
         # public groups. Joined groups and duplicate search hits do not consume

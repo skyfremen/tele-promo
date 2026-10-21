@@ -678,3 +678,50 @@ def test_run_mode_validation():
     store, tg = Memory(), Telegram()
     with pytest.raises(ValueError):
         asyncio.run(Engine(tg, store, cfg).run(mode='unsupported'))
+
+
+def test_extended_discovery_search_joins_from_second_batch():
+    class SecondBatch(Telegram):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+            self.groups = {
+                'small': Group(111, 'small', 'Comedy group', '', '', True, False, member_count=5),
+                'large': Group(222, 'large', 'Comedy group', '', '', True, False, member_count=800),
+            }
+        async def list_joined(self, limit):
+            return []
+        async def discover(self, keywords, limit, exclude_ids=None):
+            self.calls += 1
+            return [self.groups['small']] if self.calls == 1 else [self.groups['large']]
+        async def inspect(self, reference):
+            return self.groups[reference]
+        async def join(self, group):
+            self.joined += 1
+            group.member = True
+    cfg = config()
+    cfg['dry_run'] = False
+    cfg['limits']['discovery_results'] = 1
+    store, tg = Memory(), SecondBatch()
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='join'))
+    assert tg.calls == 2
+    assert tg.joined == 1 and tg.sent == 0
+    assert store.state['groups']['222']['member'] is True
+
+
+def test_extended_discovery_stops_when_no_new_candidates():
+    class NoCandidates(Telegram):
+        def __init__(self):
+            super().__init__()
+            self.calls = 0
+        async def list_joined(self, limit):
+            return []
+        async def discover(self, keywords, limit, exclude_ids=None):
+            self.calls += 1
+            return []
+    cfg = config()
+    cfg['dry_run'] = False
+    store, tg = Memory(), NoCandidates()
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='join'))
+    assert tg.calls == 2
+    assert tg.joined == tg.sent == 0

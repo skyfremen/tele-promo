@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+*.egg-info/
+.env*
+*.session*
+.tg-session*
+state*.json
+*private*.yaml
+*private*.json
+*.log

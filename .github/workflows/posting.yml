@@ -1,11 +1,10 @@
 name: Telegram message sending
+# Posting is manual only: review and obtain permission first.
 on:
-  schedule:
-    - cron: '27 */12 * * *'
   workflow_dispatch:
     inputs:
       live:
-        description: 'Explicitly allow sending only to selected groups'
+        description: 'Send live only after checking promotion permission for all joined groups'
         type: boolean
         default: false
 permissions:
@@ -15,7 +14,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   send:
-    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (vars.AUTOMATION_ENABLED == 'true' && vars.POSTING_ENABLED == 'true'))
+    if: github.ref == 'refs/heads/main' && github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: telegram
@@ -27,14 +26,14 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install -e .
-      - name: Send only to manually selected permitted groups
+      - name: Send to currently joined groups after manual permission review
         env:
           TG_API_ID: ${{ secrets.TG_API_ID }}
           TG_API_HASH: ${{ secrets.TG_API_HASH }}
           TG_SESSION: ${{ secrets.TG_SESSION }}
           STATE_REPO: ${{ secrets.STATE_REPO }}
           STATE_TOKEN: ${{ secrets.STATE_TOKEN }}
-          ALLOW_LIVE: ${{ vars.LIVE_ENABLED == 'true' && (github.event_name == 'schedule' || inputs.live == true) }}
+          ALLOW_LIVE: ${{ vars.LIVE_ENABLED == 'true' && inputs.live == true }}
         shell: bash
         run: |
           if [ "$ALLOW_LIVE" = "true" ]; then

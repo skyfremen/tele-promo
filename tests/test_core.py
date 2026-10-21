@@ -9,7 +9,7 @@ NOW = 1_800_000_000
 RULES = 'YouTube Shorts promotion is allowed.'
 
 def config():
-    return {'dry_run': True, 'keywords': ['comedy'], 'shorts': [{'url': 'https://youtube.com/shorts/abcdefghijk', 'caption': 'Original comedy'}], 'limits': {'joins_per_run': 1, 'posts_per_run': 1, 'posts_per_day': 2, 'cooldown_hours': 48, 'discovery_results': 5}, 'selected_groups': [123,456,1001,1002,1003,1004]}
+    return {'dry_run': True, 'keywords': ['comedy'], 'shorts': [{'url': 'https://youtube.com/shorts/abcdefghijk', 'caption': 'Original comedy'}], 'limits': {'joins_per_run': 1, 'posts_per_run': 1, 'posts_per_day': 2, 'cooldown_hours': 48, 'discovery_results': 5}}
 
 class Memory:
     def __init__(self):
@@ -53,7 +53,7 @@ def test_dry_run_discovers_without_join_or_post():
     store, tg = Memory(), Telegram()
     asyncio.run(Engine(tg, store, config(), now=lambda: NOW).run(live=False))
     assert tg.joined == tg.sent == 0
-    assert store.state['groups']['123']['status'] == 'eligible'
+    assert store.state['groups']['123']['status'] == 'join_candidate'
     assert not store.state['posts']
 
 
@@ -335,14 +335,13 @@ def test_minimum_group_member_config_is_validated():
     assert validate_config(cfg) == cfg
 
 
-def test_unselected_group_can_join_but_must_never_post():
+def test_join_workflow_never_posts():
     cfg = config()
     cfg['dry_run'] = False
-    cfg['selected_groups'] = []
     store, tg = Memory(), Telegram()
-    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='join'))
     assert tg.joined == 1 and tg.sent == 0
-    assert store.state['groups']['123']['status'] == 'joined_unselected'
+    assert store.state['groups']['123']['status'] == 'eligible'
 
 
 def test_selected_group_requires_real_posting_rights():
@@ -355,20 +354,10 @@ def test_selected_group_requires_real_posting_rights():
     assert store.state['groups']['123']['status'] == 'messaging_disabled'
 
 
-def test_bad_selected_ids_rejected():
-    from promo.core import validate_config
-    for selection in [[123, 123], ['123'], [0], [True], '123', list(range(101))]:
-        cfg = config()
-        cfg['selected_groups'] = selection
-        with pytest.raises(ValueError):
-            validate_config(cfg)
-
-
-def test_manually_selected_new_group_bypasses_rule_text_classification():
+def test_joined_group_does_not_depend_on_rule_text():
     cfg = config()
     cfg['dry_run'] = False
     cfg['keywords'] = ['sub4sub']
-    cfg['selected_groups'] = [1005]
     g = Group(1005, 'sub4sub_private_ok', 'Sub4Sub community',
               'Rules to be checked with group admin externally',
               '', True, False, rules_complete=False, member_count=800)
@@ -384,7 +373,6 @@ def test_read_only_group_is_rejected_without_selection_or_shorts():
     cfg = config()
     cfg['dry_run'] = False
     cfg['shorts'] = []
-    cfg['selected_groups'] = []
     cfg['keywords'] = ['sub4sub']
     cfg['limits']['min_group_members'] = 500
     g = Group(7000, 'public_sub4sub', 'Sub4Sub community',
@@ -401,7 +389,6 @@ def test_read_only_group_is_rejected_without_selection_or_shorts():
 def test_join_only_still_respects_500_member_minimum():
     cfg = config()
     cfg['dry_run'] = False
-    cfg['selected_groups'] = []
     cfg['keywords'] = ['sub4sub']
     cfg['limits']['min_group_members'] = 500
     for count in (None, 0, 499):
@@ -414,7 +401,6 @@ def test_join_only_still_respects_500_member_minimum():
 
 def test_join_only_dry_run_and_disallowed_group_stay_blocked():
     cfg = config()
-    cfg['selected_groups'] = []
     cfg['keywords'] = ['sub4sub']
     cfg['limits']['min_group_members'] = 500
     g = Group(7002, 'large_sub4sub', 'Sub4Sub', '', '', True, False,
@@ -448,7 +434,6 @@ def test_join_only_one_per_run_and_repeat_attempt_is_suppressed():
 
     cfg = config()
     cfg['dry_run'] = False
-    cfg['selected_groups'] = []
     cfg['keywords'] = ['sub4sub']
     store, tg = Memory(), TwoGroups()
     engine = Engine(tg, store, cfg, now=lambda: NOW)
@@ -465,7 +450,6 @@ def test_no_public_username_cannot_trigger_automated_join():
     cfg = config()
     cfg['dry_run'] = False
     cfg['keywords'] = ['sub4sub']
-    cfg['selected_groups'] = []
     group = Group(7201, '', 'Sub4Sub private group', '', '',
                   True, False, member_count=900)
     store, tg = Memory(), Telegram(group)
@@ -477,7 +461,6 @@ def test_join_without_shorts_only_for_writable_groups():
     cfg = config()
     cfg['dry_run'] = False
     cfg['shorts'] = []
-    cfg['selected_groups'] = []
     cfg['keywords'] = ['sub4sub']
     cfg['limits']['min_group_members'] = 500
     g = Group(7300, 'writeable_sub4sub', 'Sub4Sub', '', '', True, False,
@@ -485,7 +468,7 @@ def test_join_without_shorts_only_for_writable_groups():
     store, tg = Memory(), Telegram(g)
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
     assert tg.joined == 1 and tg.sent == 0
-    assert store.state['groups']['7300']['status'] == 'joined_unselected'
+    assert store.state['groups']['7300']['status'] == 'eligible'
     assert store.state['groups']['7300']['messaging_allowed']
 
 
@@ -496,7 +479,6 @@ def test_member_specific_read_only_rights_block_posting_after_join():
     cfg = config()
     cfg['dry_run'] = False
     cfg['keywords'] = ['sub4sub']
-    cfg['selected_groups'] = [7301]
     g = Group(7301, 'sub4sub_member_restricted', 'Sub4Sub',
               '', '', True, False, posting_allowed=True, member_count=800)
     store, tg = Memory(), MemberBannedTelegram(g)
@@ -519,7 +501,6 @@ def test_existing_member_specific_read_only_rights_are_recorded():
     cfg = config()
     cfg['dry_run'] = False
     cfg['keywords'] = ['sub4sub']
-    cfg['selected_groups'] = [7302]
     store, tg = Memory(), ExistingReadOnly()
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
     assert tg.joined == tg.sent == 0
@@ -559,7 +540,6 @@ def test_discovery_excludes_existing_memberships_from_ten_group_target():
     cfg['keywords'] = ['sub4sub']
     cfg['limits']['discovery_results'] = 10
     cfg['limits']['joins_per_run'] = 2
-    cfg['selected_groups'] = []
     cfg['dry_run'] = False
     store, tg = Memory(), NewGroups()
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
@@ -583,7 +563,6 @@ def test_discovery_in_dry_run_still_runs_with_existing_selected_group():
             return []
     cfg = config()
     cfg['keywords'] = ['sub4sub']
-    cfg['selected_groups'] = [1001]
     cfg['limits']['discovery_results'] = 10
     store, tg = Memory(), JoinedAndNew()
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=False))
@@ -657,7 +636,7 @@ def test_send_mode_never_discovers_or_joins_new_groups():
     assert not store.state['posts']
 
 
-def test_send_mode_posts_to_selected_already_joined_group():
+def test_send_mode_posts_to_already_joined_group():
     cfg = config()
     cfg['dry_run'] = False
     store, tg = Memory(), Telegram()
@@ -669,7 +648,7 @@ def test_send_mode_posts_to_selected_already_joined_group():
     assert len(store.state['posts']) == 1
 
 
-def test_send_mode_scans_saved_selected_group_outside_dialog_window():
+def test_send_mode_scans_saved_joined_group_outside_dialog_window():
     class MissingDialog(Telegram):
         async def list_joined(self, limit):
             return []
@@ -684,15 +663,14 @@ def test_send_mode_scans_saved_selected_group_outside_dialog_window():
     assert tg.joined == 0 and tg.sent == 1
 
 
-def test_send_mode_does_not_contact_unselected_joined_group():
+def test_send_mode_posts_to_joined_relevant_group_without_selection():
     cfg = config()
     cfg['dry_run'] = False
-    cfg['selected_groups'] = []
     store, tg = Memory(), Telegram()
     tg.group.member = True
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='send'))
-    assert tg.joined == tg.sent == 0
-    assert store.state['posts'] == {}
+    assert tg.joined == 0 and tg.sent == 1
+    assert len(store.state['posts']) == 1
 
 
 def test_run_mode_validation():

@@ -1,7 +1,7 @@
 # Copy this template to config.private.yaml for local edits (gitignored).
 # Import once: python -m promo init --config config.private.yaml
 # Subsequent edits: python -m promo configure --config config.private.yaml
-# Actual settings, approvals and operational history stay in private state.json.
+# Actual settings and operational history stay in private state.json.
 dry_run: true
 keywords:
   - original comedy
@@ -16,6 +16,3 @@ limits:
   posts_per_run: 1
   posts_per_day: 2
   cooldown_hours: 48
-# Explicit group IDs for which the operator has separately confirmed posting
-# permission. Joining alone never approves future groups for messaging.
-selected_groups: []

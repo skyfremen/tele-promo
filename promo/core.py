@@ -1,4 +1,4 @@
-"""Operator-selected group targets and write-ahead posting ledger."""
+"""Separate discovery and joining from manual posting."""
 from dataclasses import dataclass
 import hashlib
 import json
@@ -68,11 +68,6 @@ def validate_config(config):
             raise ValueError('Invalid operation limit')
     if type(limits.get('cooldown_hours')) is not int or not 24 <= limits['cooldown_hours'] <= 8760:
         raise ValueError('Cooldown must be at least 24 hours')
-    selected = config.get('selected_groups', [])
-    if (not isinstance(selected, list) or len(selected) > 100
-            or any(type(gid) is not int or gid <= 0 for gid in selected)
-            or len(set(selected)) != len(selected)):
-        raise ValueError('selected_groups must contain up to 100 unique numeric group IDs')
     if not isinstance(config.get('shorts'), list):
         raise ValueError('shorts must be a list')
     for short in config['shorts']:
@@ -113,7 +108,6 @@ class Engine:
         seen = set()
         new_examined = set()
         keywords = [k.lower() for k in config['keywords']]
-        selected = set(config.get('selected_groups', []))
 
         async def examine(reference, source):
             nonlocal joins, posts
@@ -125,9 +119,8 @@ class Engine:
                 new_examined.add(group.id)
             gid = str(group.id)
             relevant = any(k in (group.title + ' ' + group.about).lower() for k in keywords)
-            # Joining a relevant public group does not require text-based
-            # promotional approval. Only sending messages requires that this
-            # exact group ID was separately selected by the operator.
+            # The independent manual sending workflow verifies membership and
+            # Telegram's current messaging rights before publishing.
             denied = group.id in state.get('denied_groups', [])
             minimum_met = (group.member or
                            (type(group.member_count) is int and group.member_count >= min_members))
@@ -141,7 +134,7 @@ class Engine:
                         and not group.member and bool(group.username)
                         and minimum_met and can_message)
             postable = (not denied and relevant and group.is_group
-                        and group.id in selected and can_message)
+                        and group.member and can_message)
             previous = state['groups'].get(gid, {})
             if not relevant:
                 status = 'irrelevant'
@@ -153,8 +146,6 @@ class Engine:
                 status = 'messaging_disabled'
             elif group.member:
                 status = 'eligible' if postable else 'joined_unselected'
-            elif postable:
-                status = 'eligible'
             elif joinable:
                 status = 'join_candidate'
             else:
@@ -187,8 +178,9 @@ class Engine:
                 can_message = (bool(group.posting_allowed)
                                and bool(await self.tg.can_post(group)))
                 postable = (not denied and relevant and group.is_group
-                            and group.id in selected and can_message)
+                            and group.member and can_message)
                 state['groups'][gid]['member'] = True
+                postable = (not denied and relevant and group.is_group and can_message)
                 state['groups'][gid]['messaging_allowed'] = can_message
                 state['groups'][gid]['status'] = (
                     'messaging_disabled' if not can_message else
@@ -211,10 +203,9 @@ class Engine:
             if short is None:
                 return
 
-            # Check identity, membership and posting rights immediately
-            # before sending. Only operator-selected groups can receive posts.
+            # Validate identity, membership and posting rights before sending.
             group = await self.tg.inspect(group.username or group.id)
-            if (group.id != int(gid) or group.id not in selected
+            if (group.id != int(gid)
                     or group.id in state.get('denied_groups', [])
                     or not group.is_group or not group.member
                     or not group.posting_allowed):
@@ -267,19 +258,16 @@ class Engine:
         elif not others:
             state['joined_scan_cursor'] = 0
         for candidate in first:
-            if mode != "send" or candidate.id in selected:
-                await examine(candidate.username or candidate.id, 'already_joined')
+            await examine(candidate.username or candidate.id, 'already_joined')
 
         if mode == "send":
-            # Reinspect known, expressly selected targets outside the dialog
-            # scan. Telegram's current membership and send permissions are
-            # checked for every target. Never search or join in send mode.
-            for gid in sorted(selected):
-                if gid in seen or gid in state.get('denied_groups', []):
+            # Inspect saved memberships beyond the current dialog window too.
+            # No discovery or joining can occur in this mode.
+            for gid, saved in state['groups'].items():
+                if int(gid) in seen or int(gid) in state.get('denied_groups', []):
                     continue
-                saved = state['groups'].get(str(gid), {})
                 if saved.get('username') and saved.get('member') is True:
-                    await examine(saved['username'], 'send_selected')
+                    await examine(saved['username'], 'send_joined')
             return
 
         # Pass 2: inspect up to the configured number of distinct, unjoined

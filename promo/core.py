@@ -334,7 +334,18 @@ class Engine:
             changed = False
             checked = 0
             usernames = set()
-            for entry in candidate_doc['candidates']:
+
+            def awaiting_first_join(entry):
+                # An inspected, eligible candidate may have been left behind
+                # when the previous run reached its two-join cap.
+                saved = state['groups'].get(str(entry.get('group_id')), {})
+                return (entry.get('status') == 'join_candidate'
+                        and not saved.get('member')
+                        and not saved.get('join_attempted_at'))
+
+            # Process pending eligible joins first without reordering JSON.
+            for entry in sorted(candidate_doc['candidates'],
+                                key=lambda item: not awaiting_first_join(item)):
                 if checked >= 20:
                     break  # Bound API lookups without starving normal discovery.
                 url = entry['url']
@@ -358,7 +369,8 @@ class Engine:
                     continue
                 last = entry.get('last_checked_at', 0)
                 if (type(last) in (float, int) and last > self.now() - 7 * 86400
-                        and entry.get('status') not in (None, 'pending', 'lookup_failed')):
+                        and entry.get('status') not in (None, 'pending', 'lookup_failed')
+                        and not awaiting_first_join(entry)):
                     continue
                 already = next((int(gid) for gid, saved in state['groups'].items()
                                 if saved.get('username', '').casefold() == key

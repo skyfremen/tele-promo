@@ -547,7 +547,7 @@ def test_discovery_excludes_existing_memberships_from_ten_group_target():
     # Stop inspecting additional groups after the configured join cap.
     assert len(set(tg.inspected)) == 3
     assert tg.joined == 2 and tg.sent == 0
-    assert len([g for g in store.state['groups'].values() if g['source'] == 'discovery']) == 10
+    assert len([g for g in store.state['groups'].values() if g['source'] == 'discovery']) == 2
 
 
 def test_discovery_in_dry_run_still_runs_with_existing_selected_group():

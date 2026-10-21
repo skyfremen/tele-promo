@@ -48,12 +48,14 @@ class Setup:
         if existing_session:
             raise ValueError('A final session already exists')
         old_session = ''
+        prior_attempts = 0
         if previous:
             pending = json.loads(previous)
+            prior_attempts = pending.get('resume_attempts', int(bool(pending.get('resume_attempted'))))
             if pending.get('retry_after', 0) > self.now():
                 raise ValueError('Telegram cooldown still active')
             if self.now() - pending['created_at'] < 900:
-                if not resume or pending.get('phone_code_hash') or self.now() - pending['created_at'] < 60 or pending.get('resume_attempted'):
+                if not resume or pending.get('phone_code_hash') or self.now() - pending['created_at'] < 60 or prior_attempts >= 2:
                     raise ValueError('Request already pending or cooling down')
                 if pending['phone'] != phone:
                     raise ValueError('Phone changed during setup')
@@ -65,7 +67,7 @@ class Setup:
             await client.connect()
             pending = {'session': client.session.save(), 'phone': phone,
                        'created_at': self.now(), 'phone_code_hash': '',
-                       'password_required': False, 'resume_attempted': resume}
+                       'password_required': False, 'resume_attempted': resume, 'resume_attempts': prior_attempts + 1 if resume else 0}
             # Verify write access before asking Telegram to send a code.
             self.save_pending(pending)
             print('Temporary authentication saved; requesting Telegram code.')
@@ -121,6 +123,12 @@ class Setup:
             await client.disconnect()
 
 
+def client_for_setup(session):
+    return TelegramClient(StringSession(session), int(os.environ['TG_API_ID']),
+                          os.environ['TG_API_HASH'].strip(), request_retries=1,
+                          connection_retries=1, flood_sleep_threshold=0,
+                          raise_last_call_error=True)
+
 async def main(stage):
     logging.disable(logging.CRITICAL)
     if os.environ.get('GITHUB_ACTIONS') != 'true':
@@ -131,12 +139,7 @@ async def main(stage):
         print('TG_SESSION is already configured; existing credentials were preserved.')
         return
     vault = Vault(os.environ['GITHUB_REPOSITORY'])
-    def client_factory(session):
-        return TelegramClient(StringSession(session), int(os.environ['TG_API_ID']),
-                              os.environ['TG_API_HASH'].strip(), request_retries=0,
-                              connection_retries=1, flood_sleep_threshold=0,
-                              raise_last_call_error=True)
-    setup = Setup(vault, client_factory)
+    setup = Setup(vault, client_for_setup)
     if stage in ('request-code', 'resume-request'):
         await setup.request_code(os.environ.get('TG_PHONE', '').strip(), '',
                                  os.environ.get('TG_LOGIN_PENDING', ''), resume=stage == 'resume-request')

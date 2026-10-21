@@ -151,3 +151,33 @@ def test_error_diagnostics_never_include_exception_payload():
     message = safe_error(ValueError('sensitive-private-value'))
     assert 'ValueError' in message
     assert 'sensitive-private-value' not in message
+
+
+def test_telegram_login_follows_server_directed_data_center_migration(monkeypatch):
+    from telethon import functions
+    from telethon.errors import PhoneMigrateError
+    from promo.phone_setup import client_for_setup
+    monkeypatch.setenv('TG_API_ID', '12345')
+    monkeypatch.setenv('TG_API_HASH', '0' * 32)
+    client = client_for_setup('')
+    switches = []
+    async def unauthorized():
+        return False
+    async def switch(dc):
+        switches.append(dc)
+    client.is_user_authorized = unauthorized
+    client._switch_dc = switch
+    class Sender:
+        calls = 0
+        def send(self, request, ordered=False):
+            self.calls += 1
+            count = self.calls
+            async def result():
+                if count == 1:
+                    raise PhoneMigrateError(request=request, capture=5)
+                return True
+            return result()
+    sender = Sender()
+    assert asyncio.run(client._call(sender, functions.help.GetConfigRequest())) is True
+    assert sender.calls == 2 and switches == [5]
+    assert client.flood_sleep_threshold == 0

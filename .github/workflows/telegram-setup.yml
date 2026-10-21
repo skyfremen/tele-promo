@@ -1,0 +1,43 @@
+name: One-time Telegram login
+run-name: Telegram account setup (${{ inputs.stage }})
+on:
+  workflow_dispatch:
+    inputs:
+      stage:
+        description: 'request-code first; save TG_CODE as a secret, then finish-login'
+        required: true
+        type: choice
+        options:
+          - request-code
+          - finish-login
+permissions:
+  contents: read
+concurrency:
+  group: telegram-account-setup
+  cancel-in-progress: false
+jobs:
+  authenticate:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e .
+      - name: Authenticate without printing account details
+        env:
+          GH_TOKEN: ${{ secrets.SETUP_TOKEN }}
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          TG_SESSION: ${{ secrets.TG_SESSION }}
+          TG_PHONE: ${{ secrets.TG_PHONE }}
+          TG_CODE: ${{ secrets.TG_CODE }}
+          TG_PASSWORD: ${{ secrets.TG_PASSWORD }}
+          TG_LOGIN_PENDING: ${{ secrets.TG_LOGIN_PENDING }}
+          STAGE: ${{ inputs.stage }}
+        run: python -m promo.phone_setup "$STAGE"

@@ -100,3 +100,36 @@ def test_floodwait_saved_without_retry_or_private_logs(monkeypatch, capsys):
     cli.main()
     assert store.state['blocked_until'] > 0
     assert 'private-test-value' not in capsys.readouterr().out
+
+
+def test_candidate_json_round_trip_preserves_list_and_uses_sha(monkeypatch):
+    monkeypatch.setenv('STATE_REPO', 'owner/state')
+    monkeypatch.setenv('STATE_TOKEN', 'fake-test-value')
+    state = {'version': 1, 'groups': {}, 'posts': {}, 'blocked_until': 0}
+    candidates = {'candidates': [
+        {'url': 'https://t.me/testgroup', 'status': 'pending', 'source': 'chatgpt'},
+        {'url': 'https://t.me/othergroup', 'status': 'joined', 'group_id': 123},
+    ]}
+    writes = []
+    def request(self, method, url, data=None):
+        if method == 'PUT':
+            writes.append(deepcopy(data))
+            return {'content': {'sha': 'updated-candidate-sha'}}
+        if '/contents/candidate-groups.json' in url:
+            return {'sha': 'candidate-sha',
+                    'content': base64.b64encode(json.dumps(candidates).encode()).decode()}
+        if '/contents/state.json' in url:
+            return {'sha': 'state-sha',
+                    'content': base64.b64encode(json.dumps(state).encode()).decode()}
+        return {'private': True, 'default_branch': 'main'}
+    monkeypatch.setattr(GitHubStore, 'request', request)
+    store = GitHubStore()
+    assert store.state['posts'] == {}
+    document = store.load_candidates()
+    document['candidates'][0]['status'] = 'promotion_unverified'
+    store.save_candidates(document)
+    assert writes[0]['sha'] == 'candidate-sha'
+    assert json.loads(base64.b64decode(writes[0]['content'])) == document
+    assert len(document['candidates']) == 2
+    assert store.sha == 'state-sha'
+    assert store.candidate_sha == 'updated-candidate-sha'

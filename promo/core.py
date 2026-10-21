@@ -109,17 +109,20 @@ class Engine:
         limits = config['limits']
         mutate = live and not config['dry_run']
         min_members = limits.get('min_group_members', 100)
-        joins = posts = eligible_joined = 0
+        joins = posts = 0
         seen = set()
+        new_examined = set()
         keywords = [k.lower() for k in config['keywords']]
         selected = set(config.get('selected_groups', []))
 
         async def examine(reference, source):
-            nonlocal joins, posts, eligible_joined
+            nonlocal joins, posts
             group = await self.tg.inspect(reference)
             if group.id in seen:
                 return
             seen.add(group.id)
+            if not group.member:
+                new_examined.add(group.id)
             gid = str(group.id)
             relevant = any(k in (group.title + ' ' + group.about).lower() for k in keywords)
             # Joining a relevant public group does not require text-based
@@ -166,9 +169,6 @@ class Engine:
                 'join_attempted_at': previous.get('join_attempted_at', 0),
             }
             self.store.save(state)
-            if group.member and postable:
-                eligible_joined += 1
-
             # Joining has an independent, tightly rate-limited path. It does
             # not require Shorts configuration or permission for promotional
             # messages, and never increments the posting ledger.
@@ -248,6 +248,11 @@ class Engine:
         joined_limit = limits.get('joined_scan_limit', 100)
         inspect_limit = limits.get('joined_inspect_limit', 20)
         joined = await self.tg.list_joined(joined_limit)
+        joined_ids = {g.id for g in joined}
+        # The persisted membership state also excludes groups outside the
+        # current dialog scan. Search results are checked again for membership.
+        joined_ids.update(int(gid) for gid, info in state['groups'].items()
+                          if info.get('member') is True)
         matching = [g for g in joined if any(k in g.title.lower() for k in keywords)]
         others = [g for g in joined if not any(k in g.title.lower() for k in keywords)]
         # Spread coverage across runs: a long unrelated chat list must not hide
@@ -266,20 +271,22 @@ class Engine:
         for candidate in first:
             await examine(candidate.username or candidate.id, 'already_joined')
 
-        # Pass 2: search for public groups after checking existing memberships.
-        # Existing eligible message destinations do not prevent searching for
-        # additional relevant communities when a join slot remains available.
-        if (not mutate and eligible_joined > 0):
-            return
-        discovered = await self.tg.discover(config['keywords'], limits['discovery_results'])
-        known = [item for item in state['groups'].values()
-                 if item.get('username') and item.get('status') != 'irrelevant']
-        candidates = [g.username for g in discovered] + [
-            item['username'] for item in known if item.get('username')
+        # Pass 2: inspect up to the configured number of distinct, unjoined
+        # public groups. Joined groups and duplicate search hits do not consume
+        # the new-group discovery target.
+        target = limits['discovery_results']
+        discovered = await self.tg.discover(config['keywords'], target,
+                                            exclude_ids=joined_ids)
+        candidates = [g.username for g in discovered
+                      if g.id not in joined_ids and not g.member]
+        # Revisit known unjoined groups if Telegram returns fewer fresh results.
+        # Each group still counts at most once and must pass current checks.
+        candidates += [
+            item['username'] for gid, item in state['groups'].items()
+            if item.get('username') and item.get('member') is not True
+            and int(gid) not in joined_ids and item.get('status') != 'irrelevant'
         ]
         for reference in dict.fromkeys(candidates):
-            if len(seen) >= inspect_limit + limits['discovery_results']:
-                break
-            if posts >= limits['posts_per_run'] and joins >= limits['joins_per_run']:
+            if len(new_examined) >= target:
                 break
             await examine(reference, 'discovery')

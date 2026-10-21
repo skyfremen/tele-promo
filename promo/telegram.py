@@ -45,20 +45,35 @@ class Telegram:
                 break
         return groups
 
-    async def discover(self, keywords, limit):
+    async def discover(self, keywords, limit, exclude_ids=None):
+        """Find up to limit DISTINCT public groups not already joined.
+
+        One Telegram search may return repeated/already-joined groups. Check
+        multiple keywords with a 20-result request each; do not count those
+        groups toward the configured discovery target.
+        """
+        seen_ids = set(exclude_ids or ())
         result = []
         for keyword in keywords:
             if len(result) >= limit:
                 break
-            found = await self.client(functions.contacts.SearchRequest(q=keyword, limit=min(limit, 20)))
+            found = await self.client(functions.contacts.SearchRequest(q=keyword, limit=20))
             for entity in found.chats:
                 if (isinstance(entity, types.Channel) and entity.megagroup
                         and entity.username and not entity.scam and
-                        not entity.fake and not entity.restricted):
+                        not entity.fake and not entity.restricted
+                        and entity.id not in seen_ids):
+                    seen_ids.add(entity.id)
+                    # Telegram's Channel.left indicates we already belong to
+                    # this group. Exclude it even if outside our dialog scan.
+                    if not entity.left:
+                        continue
                     result.append(Group(entity.id, entity.username, entity.title,
-                                        '', '', True, not entity.left,
+                                        '', '', True, False,
                                         member_count=getattr(entity, 'participants_count', None)))
-        return result[:limit]
+                    if len(result) >= limit:
+                        return result
+        return result
 
     async def _resolve(self, reference):
         cached = getattr(self, '_joined_entities', {}).get(reference) if isinstance(reference, int) else None

@@ -25,7 +25,7 @@ class Telegram:
         self.failure = False
     async def list_joined(self, limit):
         return []
-    async def discover(self, keywords, limit):
+    async def discover(self, keywords, limit, exclude_ids=None):
         return [self.group]
     async def inspect(self, username):
         return self.group
@@ -222,7 +222,7 @@ def test_existing_joined_group_is_prioritized_and_never_rejoined():
         async def list_joined(self, limit):
             events.append('list_joined')
             return [self.group]
-        async def discover(self, keywords, limit):
+        async def discover(self, keywords, limit, exclude_ids=None):
             events.append('discover')
             return []
         async def inspect(self, reference):
@@ -289,7 +289,7 @@ def test_dry_run_scans_joined_first_without_global_search_when_eligible():
             self.searches = 0
         async def list_joined(self, limit):
             return [self.group]
-        async def discover(self, keywords, limit):
+        async def discover(self, keywords, limit, exclude_ids=None):
             self.searches += 1
             return []
     cfg = config()
@@ -297,7 +297,7 @@ def test_dry_run_scans_joined_first_without_global_search_when_eligible():
     store, tg = Memory(), Existing()
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=False))
     assert tg.joined == tg.sent == 0
-    assert tg.searches == 0
+    assert tg.searches == 1
 
 
 def test_joined_scan_rotates_over_unrelated_group_titles():
@@ -312,7 +312,7 @@ def test_joined_scan_rotates_over_unrelated_group_titles():
             self.checked.append(ref)
             return Group(2001 if ref == 'first' else 2002, ref,
                          'General', '', '', True, True)
-        async def discover(self, keywords, limit):
+        async def discover(self, keywords, limit, exclude_ids=None):
             return []
     cfg = config()
     cfg['keywords'] = ['sub4sub']
@@ -439,7 +439,7 @@ def test_join_only_one_per_run_and_repeat_attempt_is_suppressed():
                 'second_sub4sub': Group(7102, 'second_sub4sub', 'Sub4Sub 2',
                                        '', '', True, False, member_count=900),
             }
-        async def discover(self, keywords, limit):
+        async def discover(self, keywords, limit, exclude_ids=None):
             return list(self.groups.values())
         async def inspect(self, username):
             return self.groups[username]
@@ -525,3 +525,65 @@ def test_existing_member_specific_read_only_rights_are_recorded():
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
     assert tg.joined == tg.sent == 0
     assert store.state['groups']['7302']['status'] == 'messaging_disabled'
+
+
+def test_discovery_excludes_existing_memberships_from_ten_group_target():
+    class NewGroups(Telegram):
+        def __init__(self):
+            super().__init__()
+            self.seen_exclusions = None
+            self.inspected = []
+            self.groups = {}
+            for idx in range(10):
+                gid = 8000 + idx
+                group = Group(gid, f'sub4sub_{gid}', f'Sub4Sub {idx}', '', '',
+                              True, False, member_count=850)
+                self.groups[group.username] = group
+        async def list_joined(self, limit):
+            return [Group(123, 'sub4sub_old', 'Sub4Sub old', '', '',
+                          True, True, member_count=1000)]
+        async def discover(self, keywords, limit, exclude_ids=None):
+            self.seen_exclusions = set(exclude_ids or [])
+            assert limit == 10
+            return list(self.groups.values())
+        async def inspect(self, reference):
+            self.inspected.append(reference)
+            return self.groups[reference]
+        async def join(self, group):
+            self.joined += 1
+            group.member = True
+
+    cfg = config()
+    cfg['keywords'] = ['sub4sub']
+    cfg['limits']['discovery_results'] = 10
+    cfg['limits']['joins_per_run'] = 2
+    cfg['selected_groups'] = []
+    cfg['dry_run'] = False
+    store, tg = Memory(), NewGroups()
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
+    assert tg.seen_exclusions == {123}
+    assert len(set(tg.inspected)) == 10 + 2
+    assert tg.joined == 2 and tg.sent == 0
+    assert len([g for g in store.state['groups'].values() if g['source'] == 'discovery']) == 10
+
+
+def test_discovery_in_dry_run_still_runs_with_existing_selected_group():
+    class JoinedAndNew(Telegram):
+        def __init__(self):
+            super().__init__(Group(1001, 'old', 'Sub4Sub old', '', '',
+                                   True, True, member_count=600))
+            self.discovered_count = 0
+        async def list_joined(self, limit):
+            return [self.group]
+        async def discover(self, keywords, limit, exclude_ids=None):
+            self.discovered_count += 1
+            assert 1001 in exclude_ids
+            return []
+    cfg = config()
+    cfg['keywords'] = ['sub4sub']
+    cfg['selected_groups'] = [1001]
+    cfg['limits']['discovery_results'] = 10
+    store, tg = Memory(), JoinedAndNew()
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=False))
+    assert tg.discovered_count == 1
+    assert tg.joined == tg.sent == 0

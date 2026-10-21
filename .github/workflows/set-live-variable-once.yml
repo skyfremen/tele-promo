@@ -1,0 +1,62 @@
+name: Set live variable once
+on:
+  push:
+    paths:
+      - '.github/workflows/set-live-variable-once.yml'
+permissions:
+  contents: read
+  actions: write
+concurrency:
+  group: telegram-promotion
+  cancel-in-progress: false
+jobs:
+  set_live_variable:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    environment: telegram
+    steps:
+      - name: Set LIVE_ENABLED to true using permitted GitHub credentials
+        env:
+          STATE_TOKEN: ${{ secrets.STATE_TOKEN }}
+          REPO_TOKEN: ${{ github.token }}
+          GH_REPOSITORY: ${{ github.repository }}
+        run: |
+          python - <<'PY'
+          import json, os
+          from urllib.error import HTTPError
+          from urllib.request import Request, urlopen
+          repo = os.environ["GH_REPOSITORY"]
+          url = f"https://api.github.com/repos/{repo}/actions/variables/LIVE_ENABLED"
+          headers = {"Accept":"application/vnd.github+json",
+                     "X-GitHub-Api-Version":"2022-11-28"}
+          candidates = [("existing state token", os.environ.get("STATE_TOKEN")),
+                        ("workflow token", os.environ.get("REPO_TOKEN"))]
+          changed = False
+          for label, token in candidates:
+              if not token:
+                  continue
+              for method, endpoint, payload in (
+                  ("PATCH", url, {"name":"LIVE_ENABLED","value":"true"}),
+                  ("POST", f"https://api.github.com/repos/{repo}/actions/variables",
+                   {"name":"LIVE_ENABLED","value":"true"})):
+                  request = Request(endpoint, data=json.dumps(payload).encode(),
+                                    headers={**headers, "Authorization":f"Bearer {token}",
+                                             "Content-Type":"application/json"},
+                                    method=method)
+                  try:
+                      with urlopen(request, timeout=15) as response:
+                          if response.status not in (201,204):
+                              raise RuntimeError("Unexpected GitHub status")
+                      changed = True
+                      print("LIVE_ENABLED set to true via " + label)
+                      break
+                  except HTTPError as exc:
+                      # Don't display response bodies or tokens, which may contain private context.
+                      if exc.code not in (401,403,404,409,422):
+                          raise SystemExit("Variable update failed: HTTP " + str(exc.code))
+              if changed:
+                  break
+          if not changed:
+              raise SystemExit("Unable to set LIVE_ENABLED: supplied tokens lack Variables write permission.")
+          PY

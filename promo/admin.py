@@ -49,6 +49,20 @@ def update_settings(state, urls="", keywords=""):
     return revised
 
 
+def set_live(state, enable, confirmed=False, switch_enabled=False):
+    revised = copy.deepcopy(state)
+    if enable:
+        if not confirmed or not switch_enabled:
+            raise ValueError("Live posting requires explicit confirmation and LIVE_ENABLED")
+        if not revised["config"]["shorts"]:
+            raise ValueError("Configure at least one Shorts URL before activation")
+        if not any(item.get("status") == "eligible" for item in revised["groups"].values()):
+            raise ValueError("Run dry-run discovery and review eligible groups first")
+    revised["config"]["dry_run"] = not enable
+    revised["config"] = validate_config(revised["config"])
+    return revised
+
+
 def summary(state):
     if state is None:
         return "Private state: not initialized"
@@ -63,7 +77,7 @@ def summary(state):
 
 def main():
     action = os.environ.get("MOBILE_ACTION", "status")
-    if action not in ("status", "bootstrap", "configure"):
+    if action not in ("status", "bootstrap", "configure", "activate", "pause"):
         raise ValueError("Unsupported management operation")
     if not os.environ.get("STATE_TOKEN") or not os.environ.get("STATE_REPO"):
         raise ValueError("Configure STATE_TOKEN and STATE_REPO in GitHub Secrets")
@@ -79,6 +93,13 @@ def main():
             raise ValueError("Bootstrap private state before configuring")
         updated = update_settings(store.state, os.environ.get("MOBILE_SHORTS", ""),
                                   os.environ.get("MOBILE_KEYWORDS", ""))
+        store.save(updated)
+    elif action in ("activate", "pause"):
+        if store.state is None:
+            raise ValueError("Bootstrap private state first")
+        updated = set_live(store.state, action == "activate",
+                           confirmed=os.environ.get("MOBILE_CONFIRM_LIVE") == "true",
+                           switch_enabled=os.environ.get("LIVE_ENABLED") == "true")
         store.save(updated)
     print(summary(store.state))
     print("Telegram session secret: " +

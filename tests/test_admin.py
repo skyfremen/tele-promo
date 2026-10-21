@@ -1,6 +1,6 @@
 import copy
 import pytest
-from promo.admin import parse_shorts, update_settings, summary
+from promo.admin import parse_shorts, update_settings, summary, set_live
 from promo.store import validate_state
 
 
@@ -56,3 +56,19 @@ def test_management_rejects_invalid_keywords_and_noop():
         update_settings(base_state(), "", "")
     with pytest.raises(ValueError):
         update_settings(base_state(), keywords="a")
+
+def test_activation_requires_explicit_double_consent_and_discovery():
+    state = base_state()
+    state["config"]["shorts"] = parse_shorts("https://youtu.be/abcdefghijk")
+    with pytest.raises(ValueError):
+        set_live(state, True)
+    with pytest.raises(ValueError):
+        set_live(state, True, confirmed=True)
+    ready = set_live(state, True, confirmed=True, switch_enabled=True)
+    assert ready["config"]["dry_run"] is False
+    assert state["config"]["dry_run"] is False
+    stopped = set_live(ready, False)
+    assert stopped["config"]["dry_run"] is True
+    state["groups"].clear()
+    with pytest.raises(ValueError):
+        set_live(state, True, confirmed=True, switch_enabled=True)

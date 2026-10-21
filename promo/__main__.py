@@ -23,8 +23,8 @@ def main():
     sub = parser.add_subparsers(dest='command', required=True)
     run = sub.add_parser('run')
     run.add_argument('--live', action='store_true', help='Also requires private config dry_run: false')
-    run.add_argument('--mode', choices=('join', 'send'), required=True,
-                     help='Separate group discovery/joining from message sending')
+    run.add_argument('--mode', choices=('join', 'send'), default='join',
+                     help='Explicit join or send operation (default: join only)')
     init = sub.add_parser('init', help='Initialize state once; existing state is never overwritten')
     init.add_argument('--config', default='config.yaml')
     cfg = sub.add_parser('configure', help='Replace private settings without resetting history')

@@ -1,4 +1,4 @@
-name: Telegram promotion
+name: Telegram group discovery and joining
 on:
   schedule:
     - cron: '17 */12 * * *'
@@ -14,7 +14,7 @@ concurrency:
   group: telegram-promotion
   cancel-in-progress: false
 jobs:
-  promote:
+  discover_join:
     if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || vars.AUTOMATION_ENABLED == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -38,7 +38,7 @@ jobs:
         shell: bash
         run: |
           if [ "$ALLOW_LIVE" = "true" ]; then
-            python -m promo run --live
+            python -m promo run --mode join --live
           else
-            python -m promo run
+            python -m promo run --mode join
           fi

@@ -629,3 +629,75 @@ def test_telegram_discovery_deduplicates_and_excludes_joined_ids(monkeypatch):
     assert all(not g.member for g in groups)
     assert {g.id for g in groups} == set(range(200, 210))
     assert telegram.client.queries == [('first', 20), ('second', 20)]
+
+
+def test_join_mode_never_posts_even_when_selected_and_live():
+    cfg = config()
+    cfg['dry_run'] = False
+    store, tg = Memory(), Telegram()
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='join'))
+    assert tg.joined == 1
+    assert tg.sent == 0
+    assert store.state['posts'] == {}
+
+
+def test_send_mode_never_discovers_or_joins_new_groups():
+    class WatchTelegram(Telegram):
+        def __init__(self):
+            super().__init__()
+            self.searches = 0
+        async def discover(self, keywords, limit, exclude_ids=None):
+            self.searches += 1
+            return await super().discover(keywords, limit, exclude_ids)
+    cfg = config()
+    cfg['dry_run'] = False
+    store, tg = Memory(), WatchTelegram()
+    store.state['groups']['123'] = {'username': 'comedy_test', 'member': False}
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='send'))
+    assert tg.searches == tg.joined == tg.sent == 0
+    assert not store.state['posts']
+
+
+def test_send_mode_posts_to_selected_already_joined_group():
+    cfg = config()
+    cfg['dry_run'] = False
+    store, tg = Memory(), Telegram()
+    tg.group.member = True
+    store.state['groups']['123'] = {'username': 'comedy_test', 'member': True}
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='send'))
+    assert tg.joined == 0
+    assert tg.sent == 1
+    assert len(store.state['posts']) == 1
+
+
+def test_send_mode_scans_saved_selected_group_outside_dialog_window():
+    class MissingDialog(Telegram):
+        async def list_joined(self, limit):
+            return []
+        async def discover(self, keywords, limit, exclude_ids=None):
+            raise AssertionError('sending must not perform discovery')
+    cfg = config()
+    cfg['dry_run'] = False
+    store, tg = Memory(), MissingDialog()
+    tg.group.member = True
+    store.state['groups']['123'] = {'username': 'comedy_test', 'member': True}
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='send'))
+    assert tg.joined == 0 and tg.sent == 1
+
+
+def test_send_mode_does_not_contact_unselected_joined_group():
+    cfg = config()
+    cfg['dry_run'] = False
+    cfg['selected_groups'] = []
+    store, tg = Memory(), Telegram()
+    tg.group.member = True
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='send'))
+    assert tg.joined == tg.sent == 0
+    assert store.state['posts'] == {}
+
+
+def test_run_mode_validation():
+    cfg = config()
+    store, tg = Memory(), Telegram()
+    with pytest.raises(ValueError):
+        asyncio.run(Engine(tg, store, cfg).run(mode='unsupported'))

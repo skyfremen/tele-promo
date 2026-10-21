@@ -1,0 +1,44 @@
+name: Telegram message sending
+on:
+  schedule:
+    - cron: '27 */12 * * *'
+  workflow_dispatch:
+    inputs:
+      live:
+        description: 'Explicitly allow sending only to selected groups'
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: telegram-promotion
+  cancel-in-progress: false
+jobs:
+  send:
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'workflow_dispatch' || (vars.AUTOMATION_ENABLED == 'true' && vars.POSTING_ENABLED == 'true'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: telegram
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e .
+      - name: Send only to manually selected permitted groups
+        env:
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          TG_SESSION: ${{ secrets.TG_SESSION }}
+          STATE_REPO: ${{ secrets.STATE_REPO }}
+          STATE_TOKEN: ${{ secrets.STATE_TOKEN }}
+          ALLOW_LIVE: ${{ vars.LIVE_ENABLED == 'true' && (github.event_name == 'schedule' || inputs.live == true) }}
+        shell: bash
+        run: |
+          if [ "$ALLOW_LIVE" = "true" ]; then
+            python -m promo run --mode send --live
+          else
+            python -m promo run --mode send
+          fi

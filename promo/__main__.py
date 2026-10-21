@@ -23,6 +23,8 @@ def main():
     sub = parser.add_subparsers(dest='command', required=True)
     run = sub.add_parser('run')
     run.add_argument('--live', action='store_true', help='Also requires private config dry_run: false')
+    run.add_argument('--mode', choices=('join', 'send'), required=True,
+                     help='Separate group discovery/joining from message sending')
     init = sub.add_parser('init', help='Initialize state once; existing state is never overwritten')
     init.add_argument('--config', default='config.yaml')
     cfg = sub.add_parser('configure', help='Replace private settings without resetting history')
@@ -81,7 +83,7 @@ def main():
             tg = Telegram(os.environ['TG_SESSION'], os.environ['TG_API_ID'], os.environ['TG_API_HASH'])
             try:
                 await tg.connect()
-                await Engine(tg, store, config).run(live=args.live)
+                await Engine(tg, store, config).run(live=args.live, mode=args.mode)
             except (FloodWaitError, SlowModeWaitError) as exc:
                 state['blocked_until'] = time.time() + exc.seconds + 60
                 store.save(state)

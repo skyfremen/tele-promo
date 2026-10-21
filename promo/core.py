@@ -102,7 +102,11 @@ class Engine:
     def __init__(self, telegram, store, config, now=time.time):
         self.tg, self.store, self.config, self.now = telegram, store, validate_config(config), now
 
-    async def run(self, live=False):
+    async def run(self, live=False, mode="all"):
+        # "all" is retained only for existing local tests/callers; production
+        # workflows explicitly select one non-overlapping operation.
+        if mode not in ("join", "send", "all"):
+            raise ValueError("Unsupported operation mode")
         state, config = self.store.state, self.config
         if state.get('blocked_until', 0) > self.now():
             return
@@ -172,7 +176,7 @@ class Engine:
             # Joining has an independent, tightly rate-limited path. It does
             # not require Shorts configuration or permission for promotional
             # messages, and never increments the posting ledger.
-            if mutate and joinable and joins < limits['joins_per_run'] and not (
+            if mode != "send" and mutate and joinable and joins < limits['joins_per_run'] and not (
                     previous.get('join_attempted_at') and
                     self.now() - previous['join_attempted_at'] < 7 * 86400):
                 state['groups'][gid]['join_attempted_at'] = self.now()
@@ -194,7 +198,8 @@ class Engine:
                     'messaging_disabled' if not can_message else
                     'eligible' if postable else 'joined_unselected')
                 self.store.save(state)
-            if not mutate or not postable or not group.member or not config['shorts']:
+            if (mode == "join" or not mutate or not postable
+                    or not group.member or not config['shorts']):
                 return
 
             ledger = state['posts']
@@ -269,7 +274,20 @@ class Engine:
         elif not others:
             state['joined_scan_cursor'] = 0
         for candidate in first:
-            await examine(candidate.username or candidate.id, 'already_joined')
+            if mode != "send" or candidate.id in selected:
+                await examine(candidate.username or candidate.id, 'already_joined')
+
+        if mode == "send":
+            # Reinspect known, expressly selected targets outside the dialog
+            # scan. Telegram's current membership and send permissions are
+            # checked for every target. Never search or join in send mode.
+            for gid in sorted(selected):
+                if gid in seen or gid in state.get('denied_groups', []):
+                    continue
+                saved = state['groups'].get(str(gid), {})
+                if saved.get('username') and saved.get('member') is True:
+                    await examine(saved['username'], 'send_selected')
+            return
 
         # Pass 2: inspect up to the configured number of distinct, unjoined
         # public groups. Joined groups and duplicate search hits do not consume

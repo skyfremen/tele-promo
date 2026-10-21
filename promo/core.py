@@ -93,6 +93,11 @@ def validate_config(config):
             raise ValueError('Invalid operation limit')
     if type(limits.get('cooldown_hours')) is not int or not 24 <= limits['cooldown_hours'] <= 8760:
         raise ValueError('Cooldown must be at least 24 hours')
+    selected = config.get('selected_groups', [])
+    if (not isinstance(selected, list) or len(selected) > 100
+            or any(type(gid) is not int or gid <= 0 for gid in selected)
+            or len(set(selected)) != len(selected)):
+        raise ValueError('selected_groups must contain up to 100 unique numeric group IDs')
     if not isinstance(config.get('shorts'), list) or not isinstance(config.get('approved_groups'), list):
         raise ValueError('shorts and approved_groups must be lists')
     for approval in config['approved_groups']:
@@ -132,6 +137,7 @@ class Engine:
         joins = posts = eligible_joined = 0
         seen = set()
         keywords = [k.lower() for k in config['keywords']]
+        selected = set(config.get('selected_groups', []))
 
         async def examine(reference, source):
             nonlocal joins, posts, eligible_joined
@@ -141,15 +147,21 @@ class Engine:
             seen.add(group.id)
             gid = str(group.id)
             relevant = any(k in (group.title + ' ' + group.about).lower() for k in keywords)
-            allowed = (group.id not in state.get('denied_groups', [])
-                       and relevant and permitted(group, config['approved_groups'], self.now()))
+            # Permission is obtained separately by the operator. Only explicitly
+            # selected group IDs may be joined or messaged; search results alone
+            # do not grant consent to receive automated promotional posts.
+            allowed = (group.id in selected
+                       and group.id not in state.get('denied_groups', [])
+                       and relevant and group.is_group and group.posting_allowed)
             minimum_met = (group.member or
                            (type(group.member_count) is int and group.member_count >= min_members))
             previous = state['groups'].get(gid, {})
             if not relevant:
                 status = 'irrelevant'
-            elif not allowed:
-                status = 'needs_approval'
+            elif group.id not in selected:
+                status = 'not_selected'
+            elif not group.is_group or not group.posting_allowed or group.id in state.get('denied_groups', []):
+                status = 'restricted'
             elif not minimum_met:
                 status = 'member_count_unknown' if group.member_count is None else 'below_member_minimum'
             else:
@@ -202,12 +214,13 @@ class Engine:
                 state['groups'][gid]['member'] = True
                 self.store.save(state)
 
-            # Check current rules again immediately before posting, not just
-            # the cached discovery result. Existing groups follow the same gate.
+            # Check identity, membership and posting rights immediately
+            # before sending. Only operator-selected groups can receive posts.
             group = await self.tg.inspect(group.username or group.id)
-            if (group.id != int(gid) or
-                    group.id in state.get('denied_groups', []) or
-                    not permitted(group, config['approved_groups'], self.now())):
+            if (group.id != int(gid) or group.id not in selected
+                    or group.id in state.get('denied_groups', [])
+                    or not group.is_group or not group.member
+                    or not group.posting_allowed):
                 return
             if not await self.tg.can_post(group):
                 state['groups'][gid]['status'] = 'restricted'

@@ -20,3 +20,6 @@ limits:
 # --group ID --rules-sha256 HASH --evidence 'explicit admin/rules permission'
 # --confirm-promotion-permitted. Approvals expire in 7 days and on rules changes.
 approved_groups: []
+# Explicitly selected group IDs after obtaining permission externally.
+# Until selected, discovery scans without joining or posting.
+selected_groups: []

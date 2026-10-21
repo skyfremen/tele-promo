@@ -13,6 +13,17 @@ on:
           - configure
           - activate
           - pause
+          - select_groups
+          - clear_selection
+      group_ids:
+        description: 'Numeric group IDs from private state.json, comma-separated'
+        type: string
+        required: false
+      confirm_permission:
+        description: 'I obtained permission for these groups separately'
+        type: boolean
+        required: false
+        default: false
       confirm_live:
         description: 'Confirm live actions; also requires LIVE_ENABLED repository variable'
         type: boolean
@@ -56,6 +67,8 @@ jobs:
           TG_SESSION: ${{ secrets.TG_SESSION }}
           MOBILE_ACTION: ${{ inputs.action }}
           MOBILE_CONFIRM_LIVE: ${{ inputs.confirm_live }}
+          MOBILE_GROUP_IDS: ${{ inputs.group_ids }}
+          MOBILE_CONFIRM_PERMISSION: ${{ inputs.confirm_permission }}
           LIVE_ENABLED: ${{ vars.LIVE_ENABLED }}
           MOBILE_SHORTS: ${{ inputs.shorts }}
           MOBILE_KEYWORDS: ${{ inputs.keywords }}

@@ -544,7 +544,8 @@ def test_discovery_excludes_existing_memberships_from_ten_group_target():
     store, tg = Memory(), NewGroups()
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='join'))
     assert tg.seen_exclusions == {123}
-    assert len(set(tg.inspected)) == 11
+    # Stop inspecting additional groups after the configured join cap.
+    assert len(set(tg.inspected)) == 3
     assert tg.joined == 2 and tg.sent == 0
     assert len([g for g in store.state['groups'].values() if g['source'] == 'discovery']) == 10
 

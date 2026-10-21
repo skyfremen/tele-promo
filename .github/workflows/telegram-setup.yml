@@ -10,6 +10,7 @@ on:
         options:
           - request-code
           - finish-login
+          - resume-request
 permissions:
   contents: read
 concurrency:

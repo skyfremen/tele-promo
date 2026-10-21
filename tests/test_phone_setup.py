@@ -133,3 +133,21 @@ def test_cleanup_ignores_secrets_that_were_never_set(monkeypatch):
     from promo.phone_setup import Vault as GitHubVault
     monkeypatch.setattr('promo.phone_setup.subprocess.run', lambda *a, **kw: SimpleNamespace(returncode=1, stderr='HTTP 404: Not Found'))
     GitHubVault('owner/repo').delete('TG_PASSWORD')
+
+
+def test_partial_request_can_resume_once_without_overriding_cooldowns():
+    runner, vault, client = setup()
+    partial = json.dumps({'session': 'test-session-value', 'phone': '+6500000000', 'created_at': 800, 'phone_code_hash': '', 'password_required': False})
+    asyncio.run(runner.request_code('+6500000000', existing_session='', previous=partial, resume=True))
+    assert client.sent == 1
+    blocked = json.dumps({'session': 'test-session-value', 'phone': '+6500000000', 'created_at': 800, 'phone_code_hash': '', 'retry_after': 2000})
+    with pytest.raises(ValueError):
+        asyncio.run(runner.request_code('+6500000000', existing_session='', previous=blocked, resume=True))
+    assert client.sent == 1
+
+
+def test_error_diagnostics_never_include_exception_payload():
+    from promo.phone_setup import safe_error
+    message = safe_error(ValueError('sensitive-private-value'))
+    assert 'ValueError' in message
+    assert 'sensitive-private-value' not in message

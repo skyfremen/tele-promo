@@ -44,23 +44,31 @@ class Setup:
     def save_pending(self, pending):
         self.vault.put('TG_LOGIN_PENDING', json.dumps(pending))
 
-    async def request_code(self, phone, existing_session, previous=''):
+    async def request_code(self, phone, existing_session, previous='', resume=False):
         if existing_session:
             raise ValueError('A final session already exists')
+        old_session = ''
         if previous:
             pending = json.loads(previous)
-            if pending.get('retry_after', pending['created_at'] + 900) > self.now():
-                raise ValueError('Request already pending or cooling down')
+            if pending.get('retry_after', 0) > self.now():
+                raise ValueError('Telegram cooldown still active')
+            if self.now() - pending['created_at'] < 900:
+                if not resume or pending.get('phone_code_hash') or self.now() - pending['created_at'] < 60 or pending.get('resume_attempted'):
+                    raise ValueError('Request already pending or cooling down')
+                if pending['phone'] != phone:
+                    raise ValueError('Phone changed during setup')
+                old_session = pending['session']
         if not re.fullmatch(r'\+[1-9][0-9]{6,14}', phone):
             raise ValueError('Phone must include country code')
-        client = self.client_factory('')
+        client = self.client_factory(old_session)
         try:
             await client.connect()
             pending = {'session': client.session.save(), 'phone': phone,
                        'created_at': self.now(), 'phone_code_hash': '',
-                       'password_required': False}
+                       'password_required': False, 'resume_attempted': resume}
             # Verify write access before asking Telegram to send a code.
             self.save_pending(pending)
+            print('Temporary authentication saved; requesting Telegram code.')
             try:
                 sent = await client.send_code_request(phone)
             except FloodWaitError as exc:
@@ -129,9 +137,9 @@ async def main(stage):
                               connection_retries=1, flood_sleep_threshold=0,
                               raise_last_call_error=True)
     setup = Setup(vault, client_factory)
-    if stage == 'request-code':
+    if stage in ('request-code', 'resume-request'):
         await setup.request_code(os.environ.get('TG_PHONE', '').strip(), '',
-                                 os.environ.get('TG_LOGIN_PENDING', ''))
+                                 os.environ.get('TG_LOGIN_PENDING', ''), resume=stage == 'resume-request')
         print('Code requested. Add TG_CODE in GitHub Secrets, then run finish-login within 15 minutes. No groups joined or messages posted.')
     elif stage == 'finish-login':
         result = await setup.finish(os.environ.get('TG_LOGIN_PENDING', ''),
@@ -148,10 +156,14 @@ async def main(stage):
         raise ValueError('Unknown setup stage')
 
 
+def safe_error(exc):
+    return f'Setup stopped safely ({type(exc).__name__}). No exception payload or credentials were logged.'
+
+
 if __name__ == '__main__':
     try:
         asyncio.run(main(sys.argv[1]))
     except FloodWaitError as exc:
         sys.exit(f'Telegram rate limit: wait at least {exc.seconds} seconds. No automatic retry was attempted.')
-    except Exception:
-        sys.exit('Setup stopped safely. Check the required secrets, token permissions, and code freshness. Existing TG_SESSION was preserved; no credentials were logged.')
+    except Exception as exc:
+        sys.exit(safe_error(exc))

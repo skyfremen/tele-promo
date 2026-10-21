@@ -308,6 +308,20 @@ class Engine:
             and int(gid) not in joined_ids and item.get('status') != 'irrelevant'
         ]
         for reference in dict.fromkeys(candidates):
-            if len(new_examined) >= target:
+            if len(new_examined) >= target or joins >= limits['joins_per_run']:
                 break
             await examine(reference, 'discovery')
+
+        # If the first batch yielded no joins, inspect a bounded second batch.
+        # Avoid endless retries, repeated Telegram searches and flood limits.
+        if mode == 'join' and mutate and joins == 0 and target > 0:
+            extra = await self.tg.discover(
+                config['keywords'], min(target * 3, 60),
+                exclude_ids=joined_ids | seen,
+            )
+            for candidate in extra:
+                if joins or len(new_examined) >= min(target * 4, 80):
+                    break
+                if candidate.id in seen or candidate.id in joined_ids:
+                    continue
+                await examine(candidate.username or candidate.id, 'discovery_extended')

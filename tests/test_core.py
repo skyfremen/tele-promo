@@ -437,12 +437,12 @@ def test_join_only_one_per_run_and_repeat_attempt_is_suppressed():
     cfg['keywords'] = ['sub4sub']
     store, tg = Memory(), TwoGroups()
     engine = Engine(tg, store, cfg, now=lambda: NOW)
-    asyncio.run(engine.run(live=True))
+    asyncio.run(engine.run(live=True, mode='join'))
     assert tg.joined == 1 and tg.sent == 0
     assert sum(g['member'] for g in store.state['groups'].values()) == 1
-    asyncio.run(engine.run(live=True))
+    asyncio.run(engine.run(live=True, mode='join'))
     assert tg.joined == 2 and tg.sent == 0
-    asyncio.run(engine.run(live=True))
+    asyncio.run(engine.run(live=True, mode='join'))
     assert tg.joined == 2
 
 
@@ -542,7 +542,7 @@ def test_discovery_excludes_existing_memberships_from_ten_group_target():
     cfg['limits']['joins_per_run'] = 2
     cfg['dry_run'] = False
     store, tg = Memory(), NewGroups()
-    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True, mode='join'))
     assert tg.seen_exclusions == {123}
     assert len(set(tg.inspected)) == 11
     assert tg.joined == 2 and tg.sent == 0

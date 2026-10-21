@@ -1,0 +1,72 @@
+name: One-time Telegram discovery dry-run
+on:
+  push:
+    paths:
+      - '.github/workflows/one-shot-dry-run.yml'
+permissions:
+  contents: read
+concurrency:
+  group: telegram-promotion
+  cancel-in-progress: false
+jobs:
+  e2e:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment: telegram
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e .
+      - name: Preflight - refuse all joins and posts
+        env:
+          STATE_REPO: ${{ secrets.STATE_REPO || 'skyfremen/tele-promo-state' }}
+          STATE_TOKEN: ${{ secrets.STATE_TOKEN }}
+          TG_SESSION: ${{ secrets.TG_SESSION }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          from promo.store import GitHubStore
+          import os
+          s=GitHubStore().state
+          if s is None or s['config']['dry_run'] is not True:
+              raise SystemExit('Safety preflight failed: private state must be dry-run')
+          if not os.environ.get('TG_SESSION'):
+              raise SystemExit('Telegram session missing')
+          print('Safety preflight passed: dry-run only, zero Telegram mutations')
+          PY
+      - name: Scan joined groups first then discover (dry-run)
+        env:
+          STATE_REPO: ${{ secrets.STATE_REPO || 'skyfremen/tele-promo-state' }}
+          STATE_TOKEN: ${{ secrets.STATE_TOKEN }}
+          TG_API_ID: ${{ secrets.TG_API_ID }}
+          TG_API_HASH: ${{ secrets.TG_API_HASH }}
+          TG_SESSION: ${{ secrets.TG_SESSION }}
+        run: python -m promo run
+      - name: Report sanitized counters
+        if: success()
+        env:
+          STATE_REPO: ${{ secrets.STATE_REPO || 'skyfremen/tele-promo-state' }}
+          STATE_TOKEN: ${{ secrets.STATE_TOKEN }}
+        shell: bash
+        run: |
+          python - <<'PY'
+          from collections import Counter
+          from promo.store import GitHubStore
+          s=GitHubStore().state
+          groups=s['groups']
+          statuses=Counter(g.get('status','unknown') for g in groups.values())
+          sources=Counter(g.get('source','unknown') for g in groups.values())
+          print('Discovered groups:',len(groups))
+          print('Existing joined groups scanned:',sources.get('already_joined',0))
+          print('Search-sourced groups:',sources.get('discovery',0))
+          print('Eligible groups:',statuses.get('eligible',0))
+          print('Groups below minimum:',statuses.get('below_member_minimum',0))
+          print('Groups needing approval:',statuses.get('needs_approval',0))
+          print('Historical posts:',len(s['posts']))
+          print('Dry-run remains:',s['config']['dry_run'])
+          PY

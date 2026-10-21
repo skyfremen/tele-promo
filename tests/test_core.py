@@ -173,3 +173,65 @@ def test_approved_group_minimum_cooldown_is_respected():
     store.state['posts'] = {'123:123456789ab': {'group_id': 123, 'at': NOW - 72 * 3600, 'status': 'confirmed'}}
     asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
     assert tg.sent == 0
+
+
+
+EXACT_SUB4SUB_MESSAGE = (
+    "Here is my link: https://youtu.be/m8IxHy_WPJk\n\n"
+    "Please make sure to watch and before subscribing so YouTube doesn't flag it as spam and remove the sub. I will do the exact same for yours.\n\n"
+    "DM/Inbox me"
+)
+
+
+def test_sub4sub_permission_requires_explicit_standalone_rules():
+    group = Group(456, 'sub_for_sub', 'Sub4Sub', 'Sub4Sub is welcome.', '', True, False)
+    assert permitted(group, [], NOW)
+    group.pinned = 'No promotion'
+    assert not permitted(group, [], NOW)
+    group.about = 'Sub4Sub is welcome, but only at designated times'
+    group.pinned = ''
+    assert not permitted(group, [], NOW)
+
+
+def test_exact_message_validation_and_identity():
+    from promo.core import validate_config
+    cfg = config()
+    cfg['shorts'] = [{'url': 'https://youtu.be/m8IxHy_WPJk', 'message': EXACT_SUB4SUB_MESSAGE}]
+    assert validate_config(cfg) == cfg
+    cfg['shorts'][0]['message'] += '\nhttps://t.me/second_link'
+    with pytest.raises(ValueError):
+        validate_config(cfg)
+    cfg['shorts'][0]['message'] = EXACT_SUB4SUB_MESSAGE.replace('m8IxHy_WPJk', 'abcdefghijk')
+    with pytest.raises(ValueError):
+        validate_config(cfg)
+
+
+def test_exact_message_sent_unchanged_to_explicitly_permitting_group():
+    cfg = config()
+    cfg['dry_run'] = False
+    cfg['keywords'] = ['sub4sub']
+    cfg['shorts'] = [{'url': 'https://youtu.be/m8IxHy_WPJk', 'message': EXACT_SUB4SUB_MESSAGE}]
+    tg = Telegram(Group(456, 'sub_for_sub', 'Sub4Sub', 'Sub4Sub is welcome.', '', True, False))
+    received = []
+    original_send = tg.send
+
+    async def capture(group, text, random_id):
+        received.append(text)
+        return await original_send(group, text, random_id)
+
+    tg.send = capture
+    store = Memory()
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=True))
+    assert tg.joined == 1 and tg.sent == 1
+    assert received == [EXACT_SUB4SUB_MESSAGE]
+    assert len(store.state['posts']) == 1
+
+
+def test_exact_message_dry_run_cannot_post():
+    cfg = config()
+    cfg['keywords'] = ['sub4sub']
+    cfg['shorts'] = [{'url': 'https://youtu.be/m8IxHy_WPJk', 'message': EXACT_SUB4SUB_MESSAGE}]
+    tg = Telegram(Group(456, 'sub_for_sub', 'Sub4Sub', 'Sub4Sub is welcome.', '', True, False))
+    store = Memory()
+    asyncio.run(Engine(tg, store, cfg, now=lambda: NOW).run(live=False))
+    assert tg.joined == tg.sent == 0

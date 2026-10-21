@@ -51,7 +51,14 @@ def permitted(group, approvals, now):
     # Automatic permission is deliberately limited to an entire, unqualified
     # rules source. Additional text, linked rules, or conditions require review.
     sources = [s.strip() for s in (group.about, group.pinned) if s.strip()]
-    explicit = {'youtube shorts promotion is allowed.', 'youtube shorts promotion is welcome.'}
+    explicit = {
+        'youtube shorts promotion is allowed.',
+        'youtube shorts promotion is welcome.',
+        'sub4sub is allowed.',
+        'sub4sub is welcome.',
+        'sub4sub links are allowed.',
+        'sub4sub links are welcome.',
+    }
     if sources and all(s.lower() in explicit for s in sources):
         return True
     return any(
@@ -84,10 +91,20 @@ def validate_config(config):
             raise ValueError('Invalid approved group cooldown')
     for short in config['shorts']:
         video_id(short['url'])
-        if not isinstance(short.get('caption'), str) or not 1 <= len(short['caption']) <= 500:
-            raise ValueError('Caption must contain 1 to 500 characters')
-        if re.search(r'https?://|t\.me/', short['caption'], re.I):
-            raise ValueError('Put the sole promotional URL in the url field')
+        if 'message' in short:
+            message = short['message']
+            if not isinstance(message, str) or not 1 <= len(message) <= 1024:
+                raise ValueError('Message must contain 1 to 1024 characters')
+            # Preserve exact wording and line breaks, while verifying that the
+            # single embedded YouTube URL identifies the configured video.
+            links = re.findall(r'https?://[^\\s<>]+', message, re.I)
+            if len(links) != 1 or video_id(links[0]) != video_id(short['url']):
+                raise ValueError('Message must include only the configured YouTube URL')
+        else:
+            if not isinstance(short.get('caption'), str) or not 1 <= len(short['caption']) <= 500:
+                raise ValueError('Caption must contain 1 to 500 characters')
+            if re.search(r'https?://|t\\.me/', short['caption'], re.I):
+                raise ValueError('Put the sole promotional URL in the url field')
     return config
 
 
@@ -160,7 +177,8 @@ class Engine:
                 ledger[key] = entry
                 self.store.save(state)  # abort before sending if durable persistence fails
                 try:
-                    message_id = await self.tg.send(group, short['caption'] + '\nhttps://www.youtube.com/shorts/' + vid, entry['random_id'])
+                    message = short['message'] if 'message' in short else short['caption'] + '\nhttps://www.youtube.com/shorts/' + vid
+                    message_id = await self.tg.send(group, message, entry['random_id'])
                 except BaseException:
                     entry['status'] = 'uncertain'
                     self.store.save(state)
